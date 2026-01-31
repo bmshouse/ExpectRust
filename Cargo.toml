@@ -1,0 +1,30 @@
+[package]
+name = "expectrust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Core
+portable-pty = "0.8"
+tokio = { version = "1", features = ["full"] }
+bytes = "1"
+
+# Pattern matching
+regex = "1"
+globset = "0.4"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1"
+
+# Optional: Script parsing (Phase 5)
+pest = { version = "2", optional = true }
+pest_derive = { version = "2", optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+proptest = "1"
+
+[features]
+default = []
+script = ["pest", "pest_derive"]
