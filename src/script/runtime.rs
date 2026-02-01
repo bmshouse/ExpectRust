@@ -101,11 +101,8 @@ impl Runtime {
     pub fn pattern_from_ast(&self, pattern_type: &PatternType) -> Result<Pattern, ScriptError> {
         match pattern_type {
             PatternType::Exact(s) => Ok(Pattern::exact(s)),
-            PatternType::Regex(s) => {
-                eprintln!("DEBUG pattern_from_ast: Creating regex pattern from: {:?}", s);
-                Pattern::regex(s)
-                    .map_err(|e| ScriptError::PatternError(crate::PatternError::InvalidRegex(e)))
-            }
+            PatternType::Regex(s) => Pattern::regex(s)
+                .map_err(|e| ScriptError::PatternError(crate::PatternError::InvalidRegex(e))),
             PatternType::Glob(s) => Ok(Pattern::glob(s)),
             PatternType::Eof => Ok(Pattern::Eof),
             PatternType::Timeout => Ok(Pattern::Timeout),
@@ -125,69 +122,5 @@ impl Runtime {
     /// Extract variables from the context.
     pub fn into_variables(self) -> HashMap<String, Value> {
         self.context.into_variables()
-    }
-}
-
-/// Apply variable substitution to a pattern string.
-///
-/// This performs the same variable substitution that is done for other strings
-/// in the script, allowing patterns to use $variable syntax.
-fn substitute_pattern_string(s: &str, runtime: &Runtime) -> Result<String, ScriptError> {
-    let mut result = String::new();
-    let mut chars = s.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '$' {
-            // Variable substitution
-            let mut var_name = String::new();
-            while let Some(&next_ch) = chars.peek() {
-                if next_ch.is_alphanumeric() || next_ch == '_' {
-                    var_name.push(chars.next().unwrap());
-                } else {
-                    break;
-                }
-            }
-
-            if !var_name.is_empty() {
-                let value = runtime
-                    .context()
-                    .get_variable(&var_name)
-                    .ok_or_else(|| ScriptError::UndefinedVariable(var_name.clone()))?;
-                result.push_str(&value.as_string());
-            } else {
-                result.push('$');
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-
-    Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_substitute_pattern_string_no_variables() {
-        let runtime = Runtime::new(None, None, false, None);
-
-        // Test with a regex pattern containing no variables
-        let result = substitute_pattern_string("test[0-9]+", &runtime).unwrap();
-        assert_eq!(result, "test[0-9]+");
-
-        // Test with exact string
-        let result = substitute_pattern_string("hello world", &runtime).unwrap();
-        assert_eq!(result, "hello world");
-    }
-
-    #[test]
-    fn test_substitute_pattern_string_with_variable() {
-        let mut runtime = Runtime::new(None, None, false, None);
-        runtime.context_mut().set_variable("pattern".to_string(), crate::script::value::Value::String("test".to_string()));
-
-        let result = substitute_pattern_string("$pattern[0-9]+", &runtime).unwrap();
-        assert_eq!(result, "test[0-9]+");
     }
 }
