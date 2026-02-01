@@ -37,3 +37,29 @@ translator = ["script", "clap"]
 [[bin]]
 name = "expect2rust"
 required-features = ["translator"]
+
+# Examples that require the script feature
+[[example]]
+name = "script_example"
+required-features = ["script"]
+
+[[example]]
+name = "script_variables"
+required-features = ["script"]
+
+[[example]]
+name = "script_patterns"
+required-features = ["script"]
+
+[[example]]
+name = "script_python"
+required-features = ["script"]
+
+# Examples that require the translator feature
+[[example]]
+name = "translator_example"
+required-features = ["translator"]
+
+[[example]]
+name = "translator_multi_pattern"
+required-features = ["translator"]

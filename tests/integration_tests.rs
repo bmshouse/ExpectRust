@@ -258,7 +258,8 @@ async fn test_multiple_expects() {
         .spawn(if cfg!(windows) {
             "cmd /C echo First && echo Second"
         } else {
-            "sh -c 'echo First && echo Second'"
+            // Use printf instead of sh -c to avoid subshell timing issues
+            "printf 'First\\nSecond\\n'"
         })
         .expect("Failed to spawn");
 
