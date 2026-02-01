@@ -573,8 +573,7 @@ async fn test_invalid_regex_pattern() {
 
 #[tokio::test]
 async fn test_spawn_invalid_command() {
-    let result = Session::builder()
-        .spawn("definitely_not_a_real_command_12345");
+    let result = Session::builder().spawn("definitely_not_a_real_command_12345");
 
     // Should fail to spawn non-existent command
     assert!(result.is_err());

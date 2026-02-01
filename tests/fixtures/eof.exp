@@ -1,0 +1,3 @@
+spawn python -i
+expect ">>>"
+send "exit()\n"

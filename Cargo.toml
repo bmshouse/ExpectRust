@@ -21,6 +21,9 @@ thiserror = "1"
 pest = { version = "2", optional = true }
 pest_derive = { version = "2", optional = true }
 
+# Optional: CLI tools
+clap = { version = "4", features = ["derive"], optional = true }
+
 [dev-dependencies]
 tokio-test = "0.4"
 proptest = "1"
@@ -28,3 +31,8 @@ proptest = "1"
 [features]
 default = []
 script = ["pest", "pest_derive"]
+translator = ["script", "clap"]
+
+[[bin]]
+name = "expect2rust"
+required-features = ["translator"]

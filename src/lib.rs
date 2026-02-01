@@ -134,6 +134,10 @@ mod pattern;
 mod result;
 mod session;
 
+// Optional script module
+#[cfg(feature = "script")]
+pub mod script;
+
 // Public API exports
 pub use pattern::Pattern;
 pub use result::{ExpectError, MatchResult, PatternError};

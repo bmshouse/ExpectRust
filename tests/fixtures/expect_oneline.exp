@@ -1,0 +1,2 @@
+spawn python
+expect {"a" {send "b\n"}}

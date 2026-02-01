@@ -14,6 +14,8 @@ ExpectRust is now a production-ready library with async support, intelligent buf
 - **Intelligent buffering**: Handles partial matches across buffer boundaries
 - **Timeout support**: Built-in timeout handling for all operations
 - **ANSI stripping**: Optional removal of ANSI escape sequences
+- **Script parsing**: Execute traditional Expect/Tcl scripts (optional feature)
+- **Script translation**: Translate Expect scripts to Rust code with `expect2rust` CLI tool
 - **Type-safe**: Leverages Rust's type system for safe automation
 
 ## Installation
@@ -24,6 +26,12 @@ Add ExpectRust to your `Cargo.toml`:
 [dependencies]
 expectrust = "0.1"
 tokio = { version = "1", features = ["full"] }
+
+# Optional: Enable script parsing
+expectrust = { version = "0.1", features = ["script"] }
+
+# Optional: Enable script translator
+expectrust = { version = "0.1", features = ["translator"] }
 ```
 
 ## Quick Start
@@ -133,6 +141,87 @@ let session = Session::builder()
     .spawn("ssh user@example.com")?;
 ```
 
+## Script Translation (Recommended)
+
+The `expect2rust` CLI tool translates classic Expect scripts into idiomatic Rust code:
+
+```bash
+# Install the translator
+cargo install --path . --features translator
+
+# Translate an expect script
+expect2rust script.exp
+
+# The generated script.rs file contains compilable Rust code
+```
+
+### Example Translation
+
+**Input** (`test.exp`):
+```tcl
+spawn python -i
+expect ">>>"
+send "print('Hello')\n"
+expect ">>>"
+```
+
+**Output** (`test.rs`):
+```rust
+use expectrust::{Session, Pattern};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut session = Session::spawn("python -i")?;
+    session.expect(Pattern::exact(">>>")).await?;
+    session.send(b"print('Hello')\n").await?;
+    session.expect(Pattern::exact(">>>")).await?;
+    Ok(())
+}
+```
+
+**Why translation over interpretation?**
+- ✅ Full Rust type safety and compile-time checks
+- ✅ Better performance (compiled, not interpreted)
+- ✅ Easy to customize generated code
+- ✅ Full IDE support and debugging
+- ✅ Clear warnings about unsupported features
+
+See [TRANSLATOR_README.md](TRANSLATOR_README.md) for full documentation.
+
+## Script Parsing (Optional Feature)
+
+ExpectRust can also parse and execute traditional Expect scripts at runtime with Tcl-like syntax:
+
+```rust
+use expectrust::script::Script;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let script_text = r#"
+        spawn python -i
+        expect ">>> "
+        send "print('Hello')\n"
+        expect ">>> "
+        send "exit()\n"
+    "#;
+
+    let script = Script::from_str(script_text)?;
+    script.execute().await?;
+    Ok(())
+}
+```
+
+### Supported Script Features
+
+- **Commands**: `spawn`, `expect`, `send`, `close`, `wait`, `exit`
+- **Variables**: `set var value`, `$var` substitution
+- **Control flow**: `if/else`, `while`, `for`
+- **Procedures**: `proc name {args} {body}`
+- **Patterns**: exact strings, `-re` (regex), `-gl` (glob), `timeout`, `eof`
+- **Pattern blocks**: Multiple patterns with associated actions
+
+See `examples/script_*.rs` for more examples.
+
 ## API Overview
 
 ### Session
@@ -145,6 +234,13 @@ let session = Session::builder()
 - `session.send_line(line)` - Send a line (appends newline)
 - `session.is_alive()` - Check if process is running
 - `session.wait()` - Wait for process to exit
+
+### Script (with `script` feature)
+
+- `Script::from_str(text)` - Parse a script from a string
+- `Script::from_file(path)` - Parse a script from a file
+- `Script::builder()` - Create a script builder with configuration
+- `script.execute()` - Execute the script asynchronously
 
 ### Pattern Types
 
@@ -168,12 +264,20 @@ Contains information about a successful match:
 
 ## Examples
 
-Run the examples with:
+Run the core examples with:
 ```bash
 cargo run --example basic_command
 cargo run --example pattern_matching
 cargo run --example interactive_shell
 cargo run --example timeout_handling
+```
+
+Run the script examples with:
+```bash
+cargo run --features script --example script_example
+cargo run --features script --example script_variables
+cargo run --features script --example script_patterns
+cargo run --features script --example script_python
 ```
 
 ## Comparison with Other Tools
@@ -187,7 +291,7 @@ cargo run --example timeout_handling
 | Regex support | ✅ | ✅ | ✅ |
 | Timeout handling | ✅ | ✅ | ✅ |
 | Partial match tracking | ✅ | ✅ | ✅ |
-| Script parsing | 🚧 (planned) | ✅ | N/A |
+| Script parsing | ✅ (optional) | ✅ | N/A |
 | Package management | ✅ Cargo | ❌ Manual | ✅ pip |
 
 ## Architecture
@@ -217,7 +321,7 @@ ExpectRust uses a clean, modular architecture:
 - [x] ANSI escape sequence stripping
 - [x] Intelligent buffering
 - [x] Multiple pattern matching
-- [ ] Expect script parser (Tcl-like syntax)
+- [x] Expect script parser (Tcl-like syntax)
 - [ ] Advanced logging and debugging
 - [ ] Performance optimizations
 - [ ] CI/CD pipeline
@@ -233,10 +337,15 @@ ExpectRust/
 │   ├── pattern/         # Pattern matching
 │   ├── buffer/          # Buffer management
 │   ├── result/          # Result and error types
-│   ├── io/              # Async I/O wrappers
-│   └── timeout/         # Timeout utilities
+│   └── script/          # Script parser (optional feature)
+│       ├── grammar.pest # Pest grammar for Expect/Tcl
+│       ├── parser.rs    # Parser implementation
+│       ├── ast.rs       # Abstract syntax tree
+│       ├── interpreter.rs  # AST interpreter
+│       ├── runtime.rs   # Runtime environment
+│       └── ...
 ├── examples/            # Usage examples
-├── tests/               # Integration tests (TODO)
+├── tests/               # Integration tests
 ├── reference/           # Original expect source
 ├── Cargo.toml           # Dependencies
 └── README.md            # This file
@@ -253,8 +362,11 @@ cargo run --example basic_command
 cargo run --example pattern_matching
 cargo run --example interactive_shell
 
-# Run tests (TODO)
+# Run tests
 cargo test
+
+# Run tests with script feature
+cargo test --features script
 
 # Build documentation
 cargo doc --open
