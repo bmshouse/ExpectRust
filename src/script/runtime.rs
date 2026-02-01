@@ -53,11 +53,6 @@ impl Runtime {
         &mut self.context
     }
 
-    /// Get the active session, if any.
-    pub fn session(&self) -> Option<&Session> {
-        self.session.as_ref()
-    }
-
     /// Get a mutable reference to the active session, if any.
     pub fn session_mut(&mut self) -> Result<&mut Session, ScriptError> {
         self.session.as_mut().ok_or_else(|| {

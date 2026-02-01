@@ -133,8 +133,8 @@ fn strip_main_wrapper(code: &str) -> String {
             }
 
             // Dedent by one level
-            if line.starts_with("    ") {
-                result.push(&line[4..]);
+            if let Some(stripped) = line.strip_prefix("    ") {
+                result.push(stripped);
             } else {
                 result.push(*line);
             }

@@ -80,6 +80,7 @@ impl Script {
     /// let script = Script::from_str("spawn echo hello\nexpect hello")?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(input: &str) -> Result<Self, ScriptError> {
         let ast = parser::parse_script(input)?;
         Ok(Script {
@@ -148,6 +149,21 @@ impl Script {
         Ok(ScriptResult {
             exit_status: runtime.exit_status(),
             variables: runtime.into_variables(),
+        })
+    }
+}
+
+impl std::str::FromStr for Script {
+    type Err = ScriptError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let ast = parser::parse_script(s)?;
+        Ok(Script {
+            ast,
+            timeout: None,
+            max_buffer_size: None,
+            strip_ansi: false,
+            pty_size: None,
         })
     }
 }

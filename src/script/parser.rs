@@ -291,56 +291,6 @@ fn parse_brace_list(pair: pest::iterators::Pair<Rule>) -> Result<Vec<String>, Sc
     Ok(items)
 }
 
-fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, ScriptError> {
-    match pair.as_rule() {
-        Rule::expression => {
-            let inner = pair.into_inner().next().unwrap();
-            parse_expression(inner)
-        }
-        Rule::binary_expr => parse_binary_expr(pair),
-        Rule::unary_expr => parse_unary_expr(pair),
-        Rule::primary_expr => {
-            let inner = pair.into_inner().next().unwrap();
-            parse_expression(inner)
-        }
-        Rule::number => {
-            let num = pair
-                .as_str()
-                .parse::<f64>()
-                .map_err(|e| ScriptError::RuntimeError(format!("Invalid number: {}", e)))?;
-            Ok(Expression::Number(num))
-        }
-        Rule::variable => {
-            let name = pair.as_str()[1..].to_string(); // Remove '$'
-            Ok(Expression::Variable(name))
-        }
-        Rule::string => {
-            let s = pair.as_str();
-            // Remove outer quotes and parse escape sequences
-            let s = &s[1..s.len() - 1];
-            Ok(Expression::String(parse_string_inner(s)))
-        }
-        Rule::brace_string => {
-            let s = pair.as_str();
-            // Remove outer braces
-            let s = &s[1..s.len() - 1];
-            Ok(Expression::String(s.to_string()))
-        }
-        Rule::list => {
-            let mut items = Vec::new();
-            for inner_pair in pair.into_inner() {
-                items.push(parse_expression(inner_pair)?);
-            }
-            Ok(Expression::List(items))
-        }
-        Rule::bare_word => Ok(Expression::String(pair.as_str().to_string())),
-        _ => Err(ScriptError::RuntimeError(format!(
-            "Unexpected expression rule: {:?}",
-            pair.as_rule()
-        ))),
-    }
-}
-
 fn parse_word(pair: pest::iterators::Pair<Rule>) -> Result<String, ScriptError> {
     match pair.as_rule() {
         Rule::word => {
@@ -379,55 +329,6 @@ fn parse_word(pair: pest::iterators::Pair<Rule>) -> Result<String, ScriptError> 
     }
 }
 
-fn parse_binary_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expression, ScriptError> {
-    let mut inner = pair.into_inner();
-    let left = Box::new(parse_expression(inner.next().unwrap())?);
-    let op_pair = inner.next().unwrap();
-    let right = Box::new(parse_expression(inner.next().unwrap())?);
-
-    let op = match op_pair.as_str() {
-        "+" => BinaryOperator::Add,
-        "-" => BinaryOperator::Sub,
-        "*" => BinaryOperator::Mul,
-        "/" => BinaryOperator::Div,
-        "==" => BinaryOperator::Eq,
-        "!=" => BinaryOperator::Ne,
-        "<" => BinaryOperator::Lt,
-        ">" => BinaryOperator::Gt,
-        "<=" => BinaryOperator::Le,
-        ">=" => BinaryOperator::Ge,
-        "&&" => BinaryOperator::And,
-        "||" => BinaryOperator::Or,
-        _ => {
-            return Err(ScriptError::RuntimeError(format!(
-                "Unknown binary operator: {}",
-                op_pair.as_str()
-            )))
-        }
-    };
-
-    Ok(Expression::BinaryOp { left, op, right })
-}
-
-fn parse_unary_expr(pair: pest::iterators::Pair<Rule>) -> Result<Expression, ScriptError> {
-    let mut inner = pair.into_inner();
-    let op_pair = inner.next().unwrap();
-    let operand = Box::new(parse_expression(inner.next().unwrap())?);
-
-    let op = match op_pair.as_str() {
-        "-" => UnaryOperator::Neg,
-        "!" => UnaryOperator::Not,
-        _ => {
-            return Err(ScriptError::RuntimeError(format!(
-                "Unknown unary operator: {}",
-                op_pair.as_str()
-            )))
-        }
-    };
-
-    Ok(Expression::UnaryOp { op, operand })
-}
-
 fn parse_string_inner(s: &str) -> String {
     let mut result = String::new();
     let mut chars = s.chars();
@@ -454,15 +355,6 @@ fn parse_string_inner(s: &str) -> String {
     }
 
     result
-}
-
-fn evaluate_to_string(expr: Expression) -> String {
-    match expr {
-        Expression::String(s) => s,
-        Expression::Number(n) => n.to_string(),
-        Expression::Variable(v) => format!("${}", v),
-        _ => String::new(),
-    }
 }
 
 fn block_to_expression(block: Block) -> Expression {

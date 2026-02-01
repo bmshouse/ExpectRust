@@ -26,15 +26,6 @@ impl Context {
         }
     }
 
-    /// Create a new child context with this context as parent.
-    pub fn with_parent(parent: Context) -> Self {
-        Self {
-            variables: HashMap::new(),
-            procedures: HashMap::new(),
-            parent: Some(Box::new(parent)),
-        }
-    }
-
     /// Set a variable in the current context.
     pub fn set_variable(&mut self, name: String, value: Value) {
         self.variables.insert(name, value);
@@ -62,10 +53,5 @@ impl Context {
     /// Extract all variables (for returning from script execution).
     pub fn into_variables(self) -> HashMap<String, Value> {
         self.variables
-    }
-
-    /// Get a reference to all variables.
-    pub fn variables(&self) -> &HashMap<String, Value> {
-        &self.variables
     }
 }

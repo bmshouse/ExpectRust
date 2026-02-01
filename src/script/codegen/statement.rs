@@ -265,11 +265,7 @@ fn sanitize_variable_name(name: &str) -> String {
         .collect();
 
     // Ensure it doesn't start with a number
-    if sanitized
-        .chars()
-        .next()
-        .map_or(false, |c| c.is_ascii_digit())
-    {
+    if sanitized.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         format!("var_{}", sanitized)
     } else if sanitized.is_empty() {
         "var_unnamed".to_string()

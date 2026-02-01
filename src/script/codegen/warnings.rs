@@ -8,14 +8,25 @@ use std::fmt;
 pub enum TranslationWarning {
     /// Unsupported feature that requires manual implementation.
     UnsupportedFeature {
+        /// The feature name
         feature: String,
+        /// The line number
         line: usize,
+        /// Suggested workaround
         suggestion: String,
     },
     /// Behavioral difference between expect and Rust version.
-    BehaviorDifference { description: String, line: usize },
+    BehaviorDifference {
+        /// Description of the difference
+        description: String,
+        /// The line number
+        line: usize,
+    },
     /// General performance or usage note.
-    PerformanceNote { description: String },
+    PerformanceNote {
+        /// Description of the note
+        description: String,
+    },
 }
 
 impl fmt::Display for TranslationWarning {
@@ -126,17 +137,6 @@ impl WarningDetector {
         // Could add warnings for specific pattern types if needed
         // For now, all patterns are supported
     }
-}
-
-/// Format warnings as comments for generated code.
-pub fn format_warnings(warnings: &[TranslationWarning]) -> String {
-    let mut output = String::new();
-    output.push_str("// Translation warnings:\n");
-    for warning in warnings {
-        output.push_str(&format!("// - {}\n", warning));
-    }
-    output.push('\n');
-    output
 }
 
 #[cfg(test)]

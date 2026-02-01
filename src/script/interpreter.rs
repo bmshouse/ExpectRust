@@ -267,31 +267,23 @@ fn evaluate_binary_op(
 ) -> Result<Value, ScriptError> {
     match op {
         BinaryOperator::Add => {
-            let l = left.as_number().map_err(|e| ScriptError::RuntimeError(e))?;
-            let r = right
-                .as_number()
-                .map_err(|e| ScriptError::RuntimeError(e))?;
+            let l = left.as_number().map_err(ScriptError::RuntimeError)?;
+            let r = right.as_number().map_err(ScriptError::RuntimeError)?;
             Ok(Value::Number(l + r))
         }
         BinaryOperator::Sub => {
-            let l = left.as_number().map_err(|e| ScriptError::RuntimeError(e))?;
-            let r = right
-                .as_number()
-                .map_err(|e| ScriptError::RuntimeError(e))?;
+            let l = left.as_number().map_err(ScriptError::RuntimeError)?;
+            let r = right.as_number().map_err(ScriptError::RuntimeError)?;
             Ok(Value::Number(l - r))
         }
         BinaryOperator::Mul => {
-            let l = left.as_number().map_err(|e| ScriptError::RuntimeError(e))?;
-            let r = right
-                .as_number()
-                .map_err(|e| ScriptError::RuntimeError(e))?;
+            let l = left.as_number().map_err(ScriptError::RuntimeError)?;
+            let r = right.as_number().map_err(ScriptError::RuntimeError)?;
             Ok(Value::Number(l * r))
         }
         BinaryOperator::Div => {
-            let l = left.as_number().map_err(|e| ScriptError::RuntimeError(e))?;
-            let r = right
-                .as_number()
-                .map_err(|e| ScriptError::RuntimeError(e))?;
+            let l = left.as_number().map_err(ScriptError::RuntimeError)?;
+            let r = right.as_number().map_err(ScriptError::RuntimeError)?;
             if r == 0.0 {
                 return Err(ScriptError::RuntimeError("Division by zero".to_string()));
             }
@@ -300,31 +292,23 @@ fn evaluate_binary_op(
         BinaryOperator::Eq => Ok(Value::Bool(left.as_string() == right.as_string())),
         BinaryOperator::Ne => Ok(Value::Bool(left.as_string() != right.as_string())),
         BinaryOperator::Lt => {
-            let l = left.as_number().map_err(|e| ScriptError::RuntimeError(e))?;
-            let r = right
-                .as_number()
-                .map_err(|e| ScriptError::RuntimeError(e))?;
+            let l = left.as_number().map_err(ScriptError::RuntimeError)?;
+            let r = right.as_number().map_err(ScriptError::RuntimeError)?;
             Ok(Value::Bool(l < r))
         }
         BinaryOperator::Gt => {
-            let l = left.as_number().map_err(|e| ScriptError::RuntimeError(e))?;
-            let r = right
-                .as_number()
-                .map_err(|e| ScriptError::RuntimeError(e))?;
+            let l = left.as_number().map_err(ScriptError::RuntimeError)?;
+            let r = right.as_number().map_err(ScriptError::RuntimeError)?;
             Ok(Value::Bool(l > r))
         }
         BinaryOperator::Le => {
-            let l = left.as_number().map_err(|e| ScriptError::RuntimeError(e))?;
-            let r = right
-                .as_number()
-                .map_err(|e| ScriptError::RuntimeError(e))?;
+            let l = left.as_number().map_err(ScriptError::RuntimeError)?;
+            let r = right.as_number().map_err(ScriptError::RuntimeError)?;
             Ok(Value::Bool(l <= r))
         }
         BinaryOperator::Ge => {
-            let l = left.as_number().map_err(|e| ScriptError::RuntimeError(e))?;
-            let r = right
-                .as_number()
-                .map_err(|e| ScriptError::RuntimeError(e))?;
+            let l = left.as_number().map_err(ScriptError::RuntimeError)?;
+            let r = right.as_number().map_err(ScriptError::RuntimeError)?;
             Ok(Value::Bool(l >= r))
         }
         BinaryOperator::And => Ok(Value::Bool(left.as_bool() && right.as_bool())),
@@ -335,9 +319,7 @@ fn evaluate_binary_op(
 fn evaluate_unary_op(op: UnaryOperator, operand: &Value) -> Result<Value, ScriptError> {
     match op {
         UnaryOperator::Neg => {
-            let n = operand
-                .as_number()
-                .map_err(|e| ScriptError::RuntimeError(e))?;
+            let n = operand.as_number().map_err(ScriptError::RuntimeError)?;
             Ok(Value::Number(-n))
         }
         UnaryOperator::Not => Ok(Value::Bool(!operand.as_bool())),

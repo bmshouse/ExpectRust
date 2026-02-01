@@ -143,11 +143,6 @@ impl Translator {
         Ok(code)
     }
 
-    /// Add a warning.
-    fn add_warning(&mut self, warning: TranslationWarning) {
-        self.warnings.push(warning);
-    }
-
     /// Increase indentation level.
     fn push_indent(&mut self) {
         self.indent_level += 1;
@@ -191,9 +186,19 @@ impl Default for Translator {
 #[derive(Debug)]
 pub enum TranslationError {
     /// Unsupported feature that cannot be translated.
-    UnsupportedFeature { feature: String, line: usize },
+    UnsupportedFeature {
+        /// The feature name
+        feature: String,
+        /// The line number
+        line: usize,
+    },
     /// Invalid expression.
-    InvalidExpression { message: String, line: usize },
+    InvalidExpression {
+        /// Error message
+        message: String,
+        /// The line number
+        line: usize,
+    },
     /// Internal error.
     Internal(String),
 }
