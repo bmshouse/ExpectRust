@@ -98,27 +98,15 @@ impl Runtime {
     }
 
     /// Convert a PatternType from the AST to an ExpectRust Pattern.
-    ///
-    /// This method processes pattern strings by applying variable substitution,
-    /// similar to how other string values in the script are processed.
     pub fn pattern_from_ast(&self, pattern_type: &PatternType) -> Result<Pattern, ScriptError> {
         match pattern_type {
-            PatternType::Exact(s) => {
-                // Apply variable substitution
-                let processed = substitute_pattern_string(s, self)?;
-                Ok(Pattern::exact(processed))
-            }
+            PatternType::Exact(s) => Ok(Pattern::exact(s)),
             PatternType::Regex(s) => {
-                // Apply variable substitution
-                let processed = substitute_pattern_string(s, self)?;
-                Pattern::regex(&processed)
+                eprintln!("DEBUG pattern_from_ast: Creating regex pattern from: {:?}", s);
+                Pattern::regex(s)
                     .map_err(|e| ScriptError::PatternError(crate::PatternError::InvalidRegex(e)))
             }
-            PatternType::Glob(s) => {
-                // Apply variable substitution
-                let processed = substitute_pattern_string(s, self)?;
-                Ok(Pattern::glob(&processed))
-            }
+            PatternType::Glob(s) => Ok(Pattern::glob(s)),
             PatternType::Eof => Ok(Pattern::Eof),
             PatternType::Timeout => Ok(Pattern::Timeout),
         }
@@ -175,4 +163,31 @@ fn substitute_pattern_string(s: &str, runtime: &Runtime) -> Result<String, Scrip
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_substitute_pattern_string_no_variables() {
+        let runtime = Runtime::new(None, None, false, None);
+
+        // Test with a regex pattern containing no variables
+        let result = substitute_pattern_string("test[0-9]+", &runtime).unwrap();
+        assert_eq!(result, "test[0-9]+");
+
+        // Test with exact string
+        let result = substitute_pattern_string("hello world", &runtime).unwrap();
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_substitute_pattern_string_with_variable() {
+        let mut runtime = Runtime::new(None, None, false, None);
+        runtime.context_mut().set_variable("pattern".to_string(), crate::script::value::Value::String("test".to_string()));
+
+        let result = substitute_pattern_string("$pattern[0-9]+", &runtime).unwrap();
+        assert_eq!(result, "test[0-9]+");
+    }
 }
