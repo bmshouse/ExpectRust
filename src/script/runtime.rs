@@ -98,12 +98,27 @@ impl Runtime {
     }
 
     /// Convert a PatternType from the AST to an ExpectRust Pattern.
+    ///
+    /// This method processes pattern strings by applying variable substitution,
+    /// similar to how other string values in the script are processed.
     pub fn pattern_from_ast(&self, pattern_type: &PatternType) -> Result<Pattern, ScriptError> {
         match pattern_type {
-            PatternType::Exact(s) => Ok(Pattern::exact(s)),
-            PatternType::Regex(s) => Pattern::regex(s)
-                .map_err(|e| ScriptError::PatternError(crate::PatternError::InvalidRegex(e))),
-            PatternType::Glob(s) => Ok(Pattern::glob(s)),
+            PatternType::Exact(s) => {
+                // Apply variable substitution
+                let processed = substitute_pattern_string(s, self)?;
+                Ok(Pattern::exact(processed))
+            }
+            PatternType::Regex(s) => {
+                // Apply variable substitution
+                let processed = substitute_pattern_string(s, self)?;
+                Pattern::regex(&processed)
+                    .map_err(|e| ScriptError::PatternError(crate::PatternError::InvalidRegex(e)))
+            }
+            PatternType::Glob(s) => {
+                // Apply variable substitution
+                let processed = substitute_pattern_string(s, self)?;
+                Ok(Pattern::glob(&processed))
+            }
             PatternType::Eof => Ok(Pattern::Eof),
             PatternType::Timeout => Ok(Pattern::Timeout),
         }
@@ -123,4 +138,41 @@ impl Runtime {
     pub fn into_variables(self) -> HashMap<String, Value> {
         self.context.into_variables()
     }
+}
+
+/// Apply variable substitution to a pattern string.
+///
+/// This performs the same variable substitution that is done for other strings
+/// in the script, allowing patterns to use $variable syntax.
+fn substitute_pattern_string(s: &str, runtime: &Runtime) -> Result<String, ScriptError> {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '$' {
+            // Variable substitution
+            let mut var_name = String::new();
+            while let Some(&next_ch) = chars.peek() {
+                if next_ch.is_alphanumeric() || next_ch == '_' {
+                    var_name.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+
+            if !var_name.is_empty() {
+                let value = runtime
+                    .context()
+                    .get_variable(&var_name)
+                    .ok_or_else(|| ScriptError::UndefinedVariable(var_name.clone()))?;
+                result.push_str(&value.as_string());
+            } else {
+                result.push('$');
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    Ok(result)
 }
