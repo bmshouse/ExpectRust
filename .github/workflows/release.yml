@@ -118,7 +118,7 @@ jobs:
           OUTPUT: CHANGELOG.md
 
       - name: Update release with changelog
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           body: ${{ steps.changelog.outputs.content }}
           tag_name: ${{ github.ref_name }}
