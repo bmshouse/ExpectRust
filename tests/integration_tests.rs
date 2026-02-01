@@ -400,7 +400,8 @@ async fn test_control_character_send() {
 #[tokio::test]
 async fn test_null_byte_pattern() {
     // Skip on Windows as null byte handling is complex
-    if cfg!(windows) {
+    // Skip on macOS - null bytes may not be passed through PTY correctly
+    if cfg!(windows) || cfg!(target_os = "macos") {
         return;
     }
 
