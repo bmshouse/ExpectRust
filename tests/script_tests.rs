@@ -330,7 +330,7 @@ mod script_tests {
 
         let script_text = r#"
             spawn echo test123
-            expect -re "\\d+"
+            expect -re "test[0-9]+"
         "#;
 
         let script = Script::builder()
