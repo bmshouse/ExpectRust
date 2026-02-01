@@ -1,0 +1,156 @@
+// Expect/Tcl Grammar for Pest Parser
+
+WHITESPACE = _{ " " | "\t" | "\r" }
+COMMENT = _{ "#" ~ (!"\n" ~ ANY)* }
+
+// Entry point
+script = { SOI ~ statement* ~ EOI }
+
+// Statements
+statement = {
+    spawn_stmt
+  | expect_stmt
+  | send_stmt
+  | set_stmt
+  | if_stmt
+  | while_stmt
+  | for_stmt
+  | proc_stmt
+  | close_stmt
+  | wait_stmt
+  | exit_stmt
+  | call_stmt
+  | newline
+}
+
+spawn_stmt = { "spawn" ~ word+ ~ newline }
+
+expect_stmt = { "expect" ~ (expect_block | pattern_spec) ~ newline }
+
+expect_block = { "{" ~ newline* ~ expect_case+ ~ "}" }
+
+expect_case = { pattern_spec ~ brace_block }
+
+pattern_spec = {
+    ("-re" ~ word)
+  | ("-gl" ~ word)
+  | "timeout"
+  | "eof"
+  | word
+}
+
+send_stmt = { "send" ~ word ~ newline }
+
+set_stmt = { "set" ~ identifier ~ word ~ newline }
+
+if_stmt = {
+    "if" ~ brace_block ~ brace_block ~ ("else" ~ brace_block)? ~ newline
+}
+
+while_stmt = { "while" ~ brace_block ~ brace_block ~ newline }
+
+for_stmt = {
+    "for" ~ brace_block ~ brace_block ~ brace_block ~ brace_block ~ newline
+}
+
+proc_stmt = {
+    "proc" ~ identifier ~ brace_list ~ brace_block ~ newline
+}
+
+call_stmt = { identifier ~ word* ~ newline }
+
+close_stmt = { "close" ~ newline }
+
+wait_stmt = { "wait" ~ newline }
+
+exit_stmt = { "exit" ~ word? ~ newline }
+
+// Blocks
+brace_block = { "{" ~ newline* ~ statement* ~ "}" }
+
+brace_list = { "{" ~ identifier* ~ "}" }
+
+// Expressions
+expression = {
+    binary_expr
+  | unary_expr
+  | primary_expr
+}
+
+binary_expr = {
+    primary_expr ~ binary_op ~ expression
+}
+
+unary_expr = {
+    unary_op ~ primary_expr
+}
+
+primary_expr = {
+    number
+  | variable
+  | string
+  | brace_string
+  | list
+  | bare_word
+}
+
+// Word can be any primary expression or a bare word
+word = {
+    number
+  | variable
+  | string
+  | brace_string
+  | list
+  | bare_word
+}
+
+bare_word = @{
+    (ASCII_ALPHANUMERIC | "_" | "-" | "." | "/" | "\\")+
+}
+
+binary_op = {
+    "+"  | "-"  | "*"  | "/"
+  | "==" | "!=" | "<=" | ">=" | "<" | ">"
+  | "&&" | "||"
+}
+
+unary_op = {
+    "-" | "!"
+}
+
+// Primitives
+number = @{
+    "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)?
+}
+
+variable = { "$" ~ identifier }
+
+string = @{
+    "\"" ~ string_inner ~ "\""
+}
+
+string_inner = @{
+    (escape_seq | !("\"" | "\\") ~ ANY)*
+}
+
+escape_seq = @{
+    "\\" ~ ("n" | "r" | "t" | "\\" | "\"" | "$")
+}
+
+brace_string = @{
+    "{" ~ brace_string_inner ~ "}"
+}
+
+brace_string_inner = @{
+    (!("{" | "}") ~ ANY | brace_string)*
+}
+
+list = {
+    "{" ~ expression* ~ "}"
+}
+
+identifier = @{
+    (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*
+}
+
+newline = _{ "\n" }

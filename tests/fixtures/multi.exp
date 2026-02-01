@@ -1,0 +1,20 @@
+spawn ssh user@example.com
+set timeout 30
+
+expect {
+    "password:" {
+        send "mypassword\n"
+        expect "$ "
+    }
+    "Connection refused" {
+        exit 1
+    }
+    timeout {
+        exit 2
+    }
+}
+
+send "uptime\n"
+expect "$ "
+send "exit\n"
+expect eof

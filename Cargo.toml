@@ -2,6 +2,11 @@
 name = "expectrust"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.92.0"
+license = "MIT OR Apache-2.0"
+
+[package.metadata.cargo-udeps.ignore]
+development = ["proptest", "tokio-test"]
 
 [dependencies]
 # Core
@@ -21,6 +26,9 @@ thiserror = "1"
 pest = { version = "2", optional = true }
 pest_derive = { version = "2", optional = true }
 
+# Optional: CLI tools
+clap = { version = "4", features = ["derive"], optional = true }
+
 [dev-dependencies]
 tokio-test = "0.4"
 proptest = "1"
@@ -28,3 +36,34 @@ proptest = "1"
 [features]
 default = []
 script = ["pest", "pest_derive"]
+translator = ["script", "clap"]
+
+[[bin]]
+name = "expect2rust"
+required-features = ["translator"]
+
+# Examples that require the script feature
+[[example]]
+name = "script_example"
+required-features = ["script"]
+
+[[example]]
+name = "script_variables"
+required-features = ["script"]
+
+[[example]]
+name = "script_patterns"
+required-features = ["script"]
+
+[[example]]
+name = "script_python"
+required-features = ["script"]
+
+# Examples that require the translator feature
+[[example]]
+name = "translator_example"
+required-features = ["translator"]
+
+[[example]]
+name = "translator_multi_pattern"
+required-features = ["translator"]
