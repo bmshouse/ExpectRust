@@ -16,22 +16,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 1: Spawn SSH connection
     println!("\n[1] Connecting to {}...", ssh_host);
+    let command = format!("ssh {}", ssh_host);
     let mut session = Session::builder()
         .timeout(Duration::from_secs(30))
         .pty_size(24, 80)
         .strip_ansi(true) // Strip ANSI codes for cleaner matching
-        .spawn(format!("ssh {}", ssh_host))?;
+        .spawn(&command)?;
 
     // Step 2: Handle SSH connection - watch for errors or password prompt
     println!("[2] Waiting for SSH prompt or errors...");
     let ssh_patterns = [
-        Pattern::regex(r"[Pp]assword:")?,                    // Password prompt (index 0)
-        Pattern::exact("Host key verification failed"),       // SSH error (index 1)
-        Pattern::exact("Permission denied"),                  // Auth error (index 2)
-        Pattern::exact("Connection refused"),                 // Connection error (index 3)
-        Pattern::exact("No route to host"),                   // Network error (index 4)
-        Pattern::regex(r"Could not resolve hostname")?,       // DNS error (index 5)
-        Pattern::Timeout,                                     // Timeout (index 6)
+        Pattern::regex(r"[Pp]assword:")?, // Password prompt (index 0)
+        Pattern::exact("Host key verification failed"), // SSH error (index 1)
+        Pattern::exact("Permission denied"), // Auth error (index 2)
+        Pattern::exact("Connection refused"), // Connection error (index 3)
+        Pattern::exact("No route to host"), // Network error (index 4)
+        Pattern::regex(r"Could not resolve hostname")?, // DNS error (index 5)
+        Pattern::Timeout,                 // Timeout (index 6)
     ];
 
     let result = session.expect_any(&ssh_patterns).await?;
@@ -41,7 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         1 => {
             eprintln!("   ✗ ERROR: Host key verification failed");
-            eprintln!("   Hint: Run 'ssh-keyscan {} >> ~/.ssh/known_hosts'", ssh_host);
+            eprintln!(
+                "   Hint: Run 'ssh-keyscan {} >> ~/.ssh/known_hosts'",
+                ssh_host
+            );
             return Err("SSH connection failed".into());
         }
         2 => {
@@ -103,10 +107,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 6: Wait for root password prompt
     println!("[6] Waiting for root password prompt...");
     let su_patterns = [
-        Pattern::regex(r"[Pp]assword:")?,             // Password prompt (index 0)
-        Pattern::exact("su: command not found"),      // su not available (index 1)
+        Pattern::regex(r"[Pp]assword:")?,        // Password prompt (index 0)
+        Pattern::exact("su: command not found"), // su not available (index 1)
         Pattern::exact("su: must be run from a terminal"), // PTY error (index 2)
-        Pattern::Timeout,                             // Timeout (index 3)
+        Pattern::Timeout,                        // Timeout (index 3)
     ];
 
     let result = session.expect_any(&su_patterns).await?;
@@ -135,11 +139,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 7: Expect root prompt or errors
     println!("[7] Waiting for root prompt...");
     let root_prompt_patterns = [
-        Pattern::exact("# "),                          // Root prompt (index 0)
-        Pattern::exact("su: Authentication failure"),  // Wrong password (index 1)
-        Pattern::exact("su: incorrect password"),      // Wrong password alt (index 2)
-        Pattern::exact("su: Permission denied"),       // Permission denied (index 3)
-        Pattern::Timeout,                              // Timeout (index 4)
+        Pattern::exact("# "),                         // Root prompt (index 0)
+        Pattern::exact("su: Authentication failure"), // Wrong password (index 1)
+        Pattern::exact("su: incorrect password"),     // Wrong password alt (index 2)
+        Pattern::exact("su: Permission denied"),      // Permission denied (index 3)
+        Pattern::Timeout,                             // Timeout (index 4)
     ];
 
     let result = session.expect_any(&root_prompt_patterns).await?;
@@ -200,7 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if exit_status.success() {
         println!("   ✓ SSH session closed successfully");
     } else {
-        println!("   ⚠ SSH exited with status: {:?}", exit_status.code());
+        println!("   ⚠ SSH exited with status: {:?}", exit_status.exit_code());
     }
 
     println!("\n{}", "=".repeat(50));

@@ -11,9 +11,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let password = "your_password";
 
     // Connect to SSH
+    let command = format!("ssh {}", ssh_host);
     let mut session = Session::builder()
         .timeout(Duration::from_secs(30))
-        .spawn(format!("ssh {}", ssh_host))?;
+        .spawn(&command)?;
 
     // Handle password prompt or connection errors
     let patterns = [

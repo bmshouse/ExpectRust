@@ -8,7 +8,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("ExpectRust - SSH Automation Script Example");
     println!("{}", "=".repeat(50));
 
-    let script_text = r#"
+    let script_text = r##"
         # SSH Automation Script
         # Connects to SSH, escalates to root, runs apt update
 
@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         send "exit\n"
 
         puts "SSH session closed successfully"
-    "#;
+    "##;
 
     // Parse and execute the script
     let script = Script::from_str(script_text)?;
