@@ -272,6 +272,13 @@ cargo run --example interactive_shell
 cargo run --example timeout_handling
 ```
 
+Run the SSH automation examples:
+```bash
+cargo run --example ssh_automation        # Complete SSH example with error handling
+cargo run --example ssh_simple            # Minimal SSH example
+cargo run --features script --example ssh_automation_script  # Script-based SSH
+```
+
 Run the script examples with:
 ```bash
 cargo run --features script --example script_example

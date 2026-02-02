@@ -59,6 +59,10 @@ required-features = ["script"]
 name = "script_python"
 required-features = ["script"]
 
+[[example]]
+name = "ssh_automation_script"
+required-features = ["script"]
+
 # Examples that require the translator feature
 [[example]]
 name = "translator_example"
