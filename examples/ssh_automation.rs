@@ -151,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         0 => {
             println!("   ✓ Successfully escalated to root");
         }
-        1 | 2 | 3 => {
+        1..=3 => {
             eprintln!("   ✗ ERROR: Root authentication failed - incorrect password");
             return Err("su failed".into());
         }
