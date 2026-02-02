@@ -1,0 +1,121 @@
+#!/usr/bin/expect -f
+# SSH automation example in traditional Expect/Tcl syntax
+# This script can be translated to Rust using: expect2rust ssh_automation.exp
+
+set ssh_host "user@192.168.1.1"
+set user_password "user_password_here"
+set root_password "root_password_here"
+set timeout 30
+
+# Step 1: Connect to SSH
+spawn ssh $ssh_host
+
+# Step 2: Handle SSH connection - watch for errors or password prompt
+expect {
+    -re "[Pp]assword:" {
+        # Send user password
+        send "$user_password\r"
+    }
+    "Host key verification failed" {
+        puts "ERROR: Host key verification failed"
+        puts "Run: ssh-keyscan $ssh_host >> ~/.ssh/known_hosts"
+        exit 1
+    }
+    "Permission denied" {
+        puts "ERROR: Permission denied"
+        exit 1
+    }
+    "Connection refused" {
+        puts "ERROR: Connection refused"
+        exit 1
+    }
+    "No route to host" {
+        puts "ERROR: No route to host"
+        exit 1
+    }
+    timeout {
+        puts "ERROR: Connection timeout"
+        exit 1
+    }
+}
+
+# Step 3: Wait for user prompt or auth failure
+expect {
+    "$ " {
+        puts "Successfully logged in as user"
+    }
+    "Permission denied" {
+        puts "ERROR: Authentication failed"
+        exit 1
+    }
+    -re "[Pp]assword:" {
+        puts "ERROR: Incorrect password"
+        exit 1
+    }
+    timeout {
+        puts "ERROR: No shell prompt received"
+        exit 1
+    }
+}
+
+# Step 4: Escalate to root
+send "su -\r"
+
+# Step 5: Wait for root password prompt
+expect {
+    -re "[Pp]assword:" {
+        send "$root_password\r"
+    }
+    "su: command not found" {
+        puts "ERROR: su command not available"
+        exit 1
+    }
+    timeout {
+        puts "ERROR: No root password prompt"
+        exit 1
+    }
+}
+
+# Step 6: Wait for root prompt or errors
+expect {
+    "# " {
+        puts "Successfully escalated to root"
+    }
+    "su: Authentication failure" {
+        puts "ERROR: Root authentication failed"
+        exit 1
+    }
+    "su: incorrect password" {
+        puts "ERROR: Incorrect root password"
+        exit 1
+    }
+    "su: Permission denied" {
+        puts "ERROR: Permission denied"
+        exit 1
+    }
+    timeout {
+        puts "ERROR: No root prompt received"
+        exit 1
+    }
+}
+
+# Step 7: Run apt update
+send "apt update\r"
+
+# Step 8: Wait for root prompt (command completion)
+expect "# "
+puts "apt update completed"
+
+# Step 9: Exit root shell
+send "exit\r"
+
+# Step 10: Wait for user prompt
+expect "$ "
+puts "Exited root shell"
+
+# Step 11: Exit SSH
+send "exit\r"
+
+# Step 12: Wait for process to terminate
+expect eof
+puts "SSH session closed successfully"
