@@ -126,6 +126,33 @@ impl WarningDetector {
             Statement::Wait => {
                 // No warnings for wait
             }
+            Statement::Interact => {
+                // No warnings - fully supported (hands control to the real
+                // user until the child exits; string/body pattern pairs are
+                // not yet supported, see docs/CORE_CAPABILITIES_TODO.md)
+            }
+            Statement::ExpContinue => {
+                // Note: this arm only ever fires for *unsupported* uses of
+                // exp_continue. `check_expect`/`walk_block` never descends
+                // into an expect statement's action blocks (see
+                // `check_expect` below), so an `exp_continue` that's
+                // correctly placed directly inside an expect action (however
+                // deeply nested in if/while/for there) is structurally
+                // invisible to this walker and never reaches this arm - it's
+                // handled instead by `gen_expect_multi`'s loop-wrapping. This
+                // arm only sees occurrences at the top level or inside a
+                // `proc` body, where a generated `continue;` has no loop to
+                // reach.
+                self.warnings.push(TranslationWarning::UnsupportedFeature {
+                    feature: "exp_continue".to_string(),
+                    line: self.line,
+                    suggestion: "exp_continue is only supported directly inside an expect { ... } \
+                        action's body (optionally nested in if/while/for there); used at the top \
+                        level or inside a proc, there's no enclosing loop for it to continue - \
+                        restructure the retry logic manually here"
+                        .to_string(),
+                });
+            }
             Statement::Exit(_) => {
                 // No warnings for exit
             }

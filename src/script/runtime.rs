@@ -60,8 +60,11 @@ impl Runtime {
         })
     }
 
-    /// Spawn a new session with the given command.
-    pub fn spawn(&mut self, command: &str) -> Result<(), ScriptError> {
+    /// Spawn a new session with the given program + arguments (`args[0]` is
+    /// the program). Passed straight through to `SessionBuilder::spawn_args`
+    /// with no re-joining/re-splitting, so each element stays exactly one
+    /// argv entry regardless of any spaces it contains.
+    pub fn spawn(&mut self, args: &[String]) -> Result<(), ScriptError> {
         let mut builder = Session::builder();
 
         if let Some(timeout) = self.timeout {
@@ -77,7 +80,10 @@ impl Runtime {
             builder = builder.pty_size(rows, cols);
         }
 
-        let session = builder.spawn(command)?;
+        let (program, rest) = args.split_first().ok_or_else(|| {
+            ScriptError::RuntimeError("spawn requires a command".to_string())
+        })?;
+        let session = builder.spawn_args(program, rest)?;
         self.session = Some(session);
         Ok(())
     }

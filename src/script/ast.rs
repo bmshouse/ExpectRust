@@ -28,6 +28,11 @@ pub enum Statement {
     Close,
     /// Wait for process exit: `wait`
     Wait,
+    /// Hand control of the process to the user: `interact`
+    Interact,
+    /// Re-run the enclosing `expect` statement's pattern matching instead of
+    /// falling through: `exp_continue`
+    ExpContinue,
     /// Exit the script: `exit` or `exit code`
     Exit(Option<Expression>),
 }
@@ -35,8 +40,11 @@ pub enum Statement {
 /// Spawn statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpawnStmt {
-    /// Command to spawn (includes command and arguments as a single expression).
-    pub command: Expression,
+    /// Program and arguments, one expression per word (`args[0]` is the
+    /// program). Kept separate rather than joined into one string so that a
+    /// value containing spaces - whether a literal quoted word or a
+    /// substituted variable - becomes exactly one argv entry.
+    pub args: Vec<Expression>,
 }
 
 /// Expect statement.

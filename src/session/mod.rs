@@ -93,6 +93,28 @@ impl Session {
         SessionBuilder::new().spawn(command)
     }
 
+    /// Spawn a command from an already-split program and argument list
+    /// (convenience method).
+    ///
+    /// This is a shorthand for `Session::builder().spawn_args(program, args)`.
+    /// Prefer this over [`Session::spawn`] when you already have the
+    /// program and its arguments as separate values (e.g. one of them
+    /// contains spaces), since no string parsing happens here at all.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use expectrust::Session;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let session = Session::spawn_args("ssh", &["-o", "StrictHostKeyChecking=no", "host"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn spawn_args<S: AsRef<str>>(program: &str, args: &[S]) -> Result<Self, ExpectError> {
+        SessionBuilder::new().spawn_args(program, args)
+    }
+
     /// Wait for a pattern to appear in the output.
     ///
     /// This method blocks until the pattern is matched, EOF is reached, or a timeout occurs.
@@ -525,5 +547,163 @@ impl Session {
             .map_err(|e| ExpectError::IoError(std::io::Error::other(e)))??;
 
         Ok(status)
+    }
+
+    /// Hand control of the process to the real user.
+    ///
+    /// Puts the controlling terminal into raw mode (so keystrokes, including
+    /// control characters like Ctrl-C/Ctrl-D/Ctrl-Z, pass straight through
+    /// to the child instead of being line-buffered or echoed by the OS) and
+    /// forwards bytes bidirectionally between the real stdin/stdout and the
+    /// spawned process until the process exits.
+    ///
+    /// Returns `Ok(())` once the child's output reaches EOF (the process
+    /// exited) - this is the same default `interact` uses in the original
+    /// Unix `expect`: "the default eof action is to return". The terminal's
+    /// previous mode is always restored before returning, even on error.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use expectrust::{Session, Pattern};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut session = Session::spawn("ssh user@example.com")?;
+    /// session.expect(Pattern::exact("password: ")).await?;
+    /// session.send_line("hunter2").await?;
+    ///
+    /// // Hand control to the user for the rest of the session.
+    /// session.interact().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn interact(&mut self) -> Result<(), ExpectError> {
+        let _raw_mode = RawModeGuard::enable()?;
+        self.interact_with(std::io::stdin(), std::io::stdout())
+            .await
+    }
+
+    /// Forward bytes bidirectionally between `input`/`output` and the
+    /// spawned process until either side reaches EOF, without touching the
+    /// real controlling terminal's mode.
+    ///
+    /// This is the same forwarding logic behind [`Session::interact`], but
+    /// lets you supply your own I/O instead of the real stdin/stdout - e.g.
+    /// to embed interact-style handoff in a GUI terminal widget, to pipe two
+    /// sessions together, or (as `tests/session_interact_tests.rs` does) to
+    /// exercise the forwarding behavior deterministically in tests without a
+    /// real tty. Use [`Session::interact`] for the common case of handing
+    /// control to the real user.
+    ///
+    /// Note: because the two forwarding loops each run on a blocking OS
+    /// thread (`spawn_blocking`), the loop that doesn't finish first is only
+    /// `abort()`ed, not actually interrupted - if it's parked in a blocking
+    /// read, that thread keeps running in the background until its next read
+    /// returns (e.g. the user's next keystroke, or the child producing more
+    /// output) and then quietly exits. This method itself still returns as
+    /// soon as either side reaches EOF or errors.
+    pub async fn interact_with<R, W>(&mut self, mut input: R, mut output: W) -> Result<(), ExpectError>
+    where
+        R: Read + Send + 'static,
+        W: Write + Send + 'static,
+    {
+        let writer = self.master_writer.clone();
+        let reader = self.master_reader.clone();
+
+        let input_task = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            let mut buf = [0u8; 1024];
+            loop {
+                let n = input.read(&mut buf)?;
+                if n == 0 {
+                    // Real EOF on the input side (e.g. piped-in file closed).
+                    return Ok(());
+                }
+                let mut w = writer.blocking_lock();
+                w.write_all(&buf[..n])?;
+                w.flush()?;
+            }
+        });
+
+        let output_task = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = {
+                    let mut r = reader.blocking_lock();
+                    r.read(&mut buf)?
+                };
+                if n == 0 {
+                    // Child exited and closed its side of the pty.
+                    return Ok(());
+                }
+                output.write_all(&buf[..n])?;
+                output.flush()?;
+            }
+        });
+
+        // Grab abort handles before the tasks themselves are moved into
+        // `select!` below, so whichever side finishes first can cancel the
+        // other without trying to use an already-moved `JoinHandle`.
+        let input_abort = input_task.abort_handle();
+        let output_abort = output_task.abort_handle();
+
+        tokio::select! {
+            res = output_task => {
+                input_abort.abort();
+                res.map_err(|e| ExpectError::IoError(std::io::Error::other(e)))??;
+            }
+            res = input_task => {
+                output_abort.abort();
+                res.map_err(|e| ExpectError::IoError(std::io::Error::other(e)))??;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// RAII guard that puts the controlling terminal into raw mode and restores
+/// its previous mode when dropped, even if the guarded code returns early
+/// via an error.
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> Result<Self, ExpectError> {
+        crossterm::terminal::enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_raw_mode_guard_restores_on_drop() {
+        // Raw mode is inherently tied to a real controlling terminal, which
+        // isn't guaranteed to exist in every CI environment (e.g. output
+        // fully redirected/piped). Skip rather than fail when unavailable -
+        // this is an environment limitation, not a behavior we can fake.
+        let guard = match RawModeGuard::enable() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+
+        assert!(
+            crossterm::terminal::is_raw_mode_enabled().unwrap_or(false),
+            "raw mode should be enabled while the guard is held"
+        );
+
+        drop(guard);
+
+        assert!(
+            !crossterm::terminal::is_raw_mode_enabled().unwrap_or(true),
+            "raw mode should be restored once the guard is dropped"
+        );
     }
 }

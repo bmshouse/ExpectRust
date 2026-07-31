@@ -36,38 +36,79 @@ pub fn execute_statement<'a>(
             Statement::Call(stmt) => execute_call(stmt, runtime).await,
             Statement::Close => execute_close(runtime).await,
             Statement::Wait => execute_wait(runtime).await,
+            Statement::Interact => execute_interact(runtime).await,
+            Statement::ExpContinue => execute_exp_continue(),
             Statement::Exit(code_expr) => execute_exit(code_expr.as_ref(), runtime),
         }
     })
 }
 
 async fn execute_spawn(stmt: &SpawnStmt, runtime: &mut Runtime) -> Result<(), ScriptError> {
-    let command = evaluate_expression(&stmt.command, runtime)?;
-    let command_str = command.as_string();
-    runtime.spawn(&command_str)?;
+    // Evaluate each argument independently (rather than joining into one
+    // string) so a value containing spaces - whether a literal quoted word
+    // or a substituted variable - becomes exactly one argv entry.
+    let mut args = Vec::with_capacity(stmt.args.len());
+    for arg_expr in &stmt.args {
+        let value = evaluate_expression(arg_expr, runtime)?;
+        args.push(value.as_string());
+    }
+    runtime.spawn(&args)?;
     Ok(())
 }
 
 async fn execute_expect(stmt: &ExpectStmt, runtime: &mut Runtime) -> Result<(), ScriptError> {
-    // Build patterns from the expect statement
+    // Build patterns from the expect statement (once - reused on every
+    // exp_continue reloop, matching Tcl's "re-runs the same expect").
     let mut patterns = Vec::new();
     for pattern in &stmt.patterns {
         let p = runtime.pattern_from_ast(&pattern.pattern_type)?;
         patterns.push(p);
     }
 
-    // Execute expect_any to match the first pattern
-    let session = runtime.session_mut()?;
-    let result = session.expect_any(&patterns).await?;
+    loop {
+        let session = runtime.session_mut()?;
+        let result = session.expect_any(&patterns).await?;
 
-    // If the matched pattern has an action, execute it
-    if let Some(matched_pattern) = stmt.patterns.get(result.pattern_index) {
-        if let Some(action) = &matched_pattern.action {
-            execute_block(action, runtime).await?;
+        // Populate expect_out(...) so the matched pattern's action (and any
+        // later statement, e.g. a condition or send) can reference what was
+        // just matched - set before the action runs, matching Tcl's own
+        // ordering. Not cleared between matches (real Tcl arrays don't reset
+        // either): a later match that doesn't populate a given key (e.g. no
+        // capture group 2 this time) just leaves the previous value in place.
+        let ctx = runtime.context_mut();
+        ctx.set_variable(
+            "expect_out(0,string)".to_string(),
+            Value::String(result.matched.clone()),
+        );
+        ctx.set_variable(
+            "expect_out(buffer)".to_string(),
+            Value::String(format!("{}{}", result.before, result.matched)),
+        );
+        // captures[0] is the whole match (already covered above by
+        // expect_out(0,string)); captures[1..] are the regex capture groups.
+        for (i, capture) in result.captures.iter().enumerate().skip(1) {
+            ctx.set_variable(
+                format!("expect_out({},string)", i),
+                Value::String(capture.clone()),
+            );
         }
-    }
 
-    Ok(())
+        // If the matched pattern has an action, execute it. `exp_continue`
+        // inside that action (however deeply nested - if/while/for/proc
+        // calls all propagate errors upward via `?`) surfaces here as
+        // `Err(ScriptError::ExpContinue)`, which reloops this same
+        // expect statement instead of returning.
+        if let Some(matched_pattern) = stmt.patterns.get(result.pattern_index) {
+            if let Some(action) = &matched_pattern.action {
+                match execute_block(action, runtime).await {
+                    Err(ScriptError::ExpContinue) => continue,
+                    other => return other,
+                }
+            }
+        }
+
+        return Ok(());
+    }
 }
 
 async fn execute_send(stmt: &SendStmt, runtime: &mut Runtime) -> Result<(), ScriptError> {
@@ -183,6 +224,20 @@ async fn execute_wait(runtime: &mut Runtime) -> Result<(), ScriptError> {
     runtime.wait().await
 }
 
+async fn execute_interact(runtime: &mut Runtime) -> Result<(), ScriptError> {
+    runtime.session_mut()?.interact().await?;
+    Ok(())
+}
+
+/// Signal that the enclosing `expect` statement should re-run its pattern
+/// matching instead of falling through. `execute_expect` is the only place
+/// that catches this; if it escapes all the way to `Script::execute`, it
+/// means `exp_continue` was used outside of any expect action, which is a
+/// genuine usage error (matches Tcl's own behavior in that case).
+fn execute_exp_continue() -> Result<(), ScriptError> {
+    Err(ScriptError::ExpContinue)
+}
+
 fn execute_exit(code_expr: Option<&Expression>, runtime: &mut Runtime) -> Result<(), ScriptError> {
     let code = if let Some(expr) = code_expr {
         let value = evaluate_expression(expr, runtime)?;
@@ -240,6 +295,21 @@ fn substitute_variables(s: &str, runtime: &Runtime) -> Result<String, ScriptErro
                     var_name.push(chars.next().unwrap());
                 } else {
                     break;
+                }
+            }
+
+            // Array-style access, e.g. `$expect_out(0,string)` - consume
+            // through the matching ")" as part of the variable's name, same
+            // composite-key convention `execute_expect` stores expect_out
+            // under (see grammar.pest's `variable`/`array_index` rules,
+            // which do the same for a bare `$var(...)` reference).
+            if !var_name.is_empty() && chars.peek() == Some(&'(') {
+                var_name.push(chars.next().unwrap());
+                for c in chars.by_ref() {
+                    var_name.push(c);
+                    if c == ')' {
+                        break;
+                    }
                 }
             }
 

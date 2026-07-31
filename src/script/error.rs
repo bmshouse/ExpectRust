@@ -35,6 +35,10 @@ pub enum ScriptError {
     PatternError(crate::PatternError),
     /// Script exited with a code.
     Exit(i32),
+    /// `exp_continue` used outside of an expect action (if caught inside
+    /// one, it's handled internally by `execute_expect` and never surfaces
+    /// as an error).
+    ExpContinue,
 }
 
 impl fmt::Display for ScriptError {
@@ -61,6 +65,9 @@ impl fmt::Display for ScriptError {
             ScriptError::IoError(e) => write!(f, "I/O error: {}", e),
             ScriptError::PatternError(e) => write!(f, "Pattern error: {}", e),
             ScriptError::Exit(code) => write!(f, "Script exited with code {}", code),
+            ScriptError::ExpContinue => {
+                write!(f, "exp_continue used outside of an expect action")
+            }
         }
     }
 }
