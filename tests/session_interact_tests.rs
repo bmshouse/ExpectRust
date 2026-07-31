@@ -22,8 +22,7 @@ async fn test_interact_forwards_input_to_child() {
         .expect("Failed to spawn cat");
 
     let (input_reader, mut input_writer) = std::io::pipe().expect("Failed to create input pipe");
-    let (mut output_reader, output_writer) =
-        std::io::pipe().expect("Failed to create output pipe");
+    let (mut output_reader, output_writer) = std::io::pipe().expect("Failed to create output pipe");
 
     input_writer
         .write_all(b"hello from test\n")
@@ -59,12 +58,20 @@ async fn test_interact_forwards_input_to_child() {
 
 #[tokio::test]
 async fn test_interact_returns_on_child_eof() {
-    // Known pre-existing platform gap, not specific to `interact`: on this
-    // project's Windows (ConPTY) backend, a master-side read doesn't
-    // reliably return EOF (`Ok(0)`) soon after the child exits - the same
-    // reason `tests/integration_tests.rs::test_eof_pattern` accepts either
-    // a text match or an EOF match instead of relying on EOF alone. See
-    // docs/CORE_CAPABILITIES_TODO.md for tracking.
+    // Windows-only skip: on this project's Windows (ConPTY) backend, a
+    // master-side read doesn't reliably return EOF (`Ok(0)`) soon after the
+    // child exits - the same reason `tests/integration_tests.rs::test_eof_pattern`
+    // accepts either a text match or an EOF match instead of relying on EOF
+    // alone. This is a genuine, still-open ConPTY-specific gap - see
+    // docs/CORE_CAPABILITIES_TODO.md (item 18).
+    //
+    // (This test *should* pass on Unix: an earlier, separate bug - holding
+    // the pty's slave side open for the Session's whole lifetime, so the OS
+    // never considered the pty fully closed - used to make it hang/timeout
+    // there too, which is what this test caught on Ubuntu. Fixed in
+    // `SessionBuilder::spawn_argv` by dropping the slave handle right after
+    // spawning; if this test starts failing again on a non-Windows
+    // platform, that fix - not this Windows skip - is the place to look.)
     if cfg!(windows) {
         return;
     }

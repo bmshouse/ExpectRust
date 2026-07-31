@@ -286,8 +286,15 @@ impl SessionBuilder {
             .take_writer()
             .map_err(|e| ExpectError::PtyError(e.to_string()))?;
 
+        // Drop our copy of the slave side now that the child has its own
+        // (inherited via fork/exec on Unix). Otherwise our lingering handle
+        // keeps the OS's view of the pty "open" even after the child exits,
+        // so a master-side read never sees EOF - it just blocks forever
+        // instead of returning `Ok(0)`.
+        drop(pty_pair.slave);
+
         Ok(Session {
-            _pty_pair: pty_pair,
+            _pty_master: pty_pair.master,
             child: Some(child),
             master_reader: Arc::new(Mutex::new(reader)),
             master_writer: Arc::new(Mutex::new(writer)),

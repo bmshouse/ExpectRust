@@ -78,7 +78,7 @@ fn gen_expect_multi(
     // boilerplate for the common case where it isn't needed.
     let needs_loop = patterns
         .iter()
-        .any(|p| p.action.as_ref().is_some_and(|a| block_contains_exp_continue(a)));
+        .any(|p| p.action.as_ref().is_some_and(block_contains_exp_continue));
 
     let mut code = String::new();
 
@@ -153,7 +153,7 @@ fn statement_contains_exp_continue(stmt: &Statement) -> bool {
                 || if_stmt
                     .else_block
                     .as_ref()
-                    .is_some_and(|b| block_contains_exp_continue(b))
+                    .is_some_and(block_contains_exp_continue)
         }
         Statement::While(while_stmt) => block_contains_exp_continue(&while_stmt.body),
         Statement::For(for_stmt) => block_contains_exp_continue(&for_stmt.body),

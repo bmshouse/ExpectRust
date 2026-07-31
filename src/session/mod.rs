@@ -8,7 +8,7 @@ pub use builder::SessionBuilder;
 use crate::buffer::BufferManager;
 use crate::pattern::Pattern;
 use crate::result::{ExpectError, MatchResult};
-use portable_pty::{Child, ExitStatus, PtyPair};
+use portable_pty::{Child, ExitStatus, MasterPty};
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,7 +36,11 @@ use tokio::sync::Mutex;
 /// # }
 /// ```
 pub struct Session {
-    _pty_pair: PtyPair,
+    // Only the master side is kept alive - the slave side is deliberately
+    // dropped right after spawning (see `SessionBuilder::spawn_argv`), so
+    // the OS considers the pty fully closed once the child exits, which is
+    // what lets a master-side read return real EOF.
+    _pty_master: Box<dyn MasterPty + Send>,
     child: Option<Box<dyn Child + Send>>,
     master_reader: Arc<Mutex<Box<dyn Read + Send>>>,
     master_writer: Arc<Mutex<Box<dyn Write + Send>>>,
@@ -602,7 +606,11 @@ impl Session {
     /// returns (e.g. the user's next keystroke, or the child producing more
     /// output) and then quietly exits. This method itself still returns as
     /// soon as either side reaches EOF or errors.
-    pub async fn interact_with<R, W>(&mut self, mut input: R, mut output: W) -> Result<(), ExpectError>
+    pub async fn interact_with<R, W>(
+        &mut self,
+        mut input: R,
+        mut output: W,
+    ) -> Result<(), ExpectError>
     where
         R: Read + Send + 'static,
         W: Write + Send + 'static,

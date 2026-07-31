@@ -80,9 +80,9 @@ impl Runtime {
             builder = builder.pty_size(rows, cols);
         }
 
-        let (program, rest) = args.split_first().ok_or_else(|| {
-            ScriptError::RuntimeError("spawn requires a command".to_string())
-        })?;
+        let (program, rest) = args
+            .split_first()
+            .ok_or_else(|| ScriptError::RuntimeError("spawn requires a command".to_string()))?;
         let session = builder.spawn_args(program, rest)?;
         self.session = Some(session);
         Ok(())

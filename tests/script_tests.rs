@@ -236,7 +236,12 @@ mod script_tests {
         let result = script.execute().await.expect("Failed to execute");
 
         assert_eq!(
-            result.variables.get("matched").unwrap().as_number().unwrap(),
+            result
+                .variables
+                .get("matched")
+                .unwrap()
+                .as_number()
+                .unwrap(),
             1.0
         );
     }
