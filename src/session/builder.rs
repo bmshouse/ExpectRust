@@ -177,6 +177,12 @@ impl SessionBuilder {
     /// This method consumes the builder and creates a new session with the
     /// configured options.
     ///
+    /// `command` is parsed as a shell-style command line (quoting and
+    /// backslash escapes are respected, so an argument containing spaces can
+    /// be passed as e.g. `ssh -o "StrictHostKeyChecking=no" host`). If you
+    /// already have the program and its arguments as separate values, use
+    /// [`SessionBuilder::spawn_args`] instead to avoid any parsing ambiguity.
+    ///
     /// # Arguments
     ///
     /// * `command` - The command to spawn (e.g., "python -i", "ssh user@host")
@@ -184,7 +190,8 @@ impl SessionBuilder {
     /// # Errors
     ///
     /// Returns an error if:
-    /// - The command string is empty
+    /// - The command string is empty, or fails to parse as a shell command
+    ///   line (e.g. unbalanced quotes)
     /// - The PTY cannot be created
     /// - The process cannot be spawned
     ///
@@ -202,6 +209,51 @@ impl SessionBuilder {
     /// # }
     /// ```
     pub fn spawn(self, command: &str) -> Result<Session, ExpectError> {
+        let parts = parse_command_line(command)?;
+        let (program, args) = parts
+            .split_first()
+            .ok_or_else(|| ExpectError::SpawnError("Empty command".to_string()))?;
+        self.spawn_argv(program, args.iter().map(String::as_str))
+    }
+
+    /// Spawn a command from an already-split program and argument list.
+    ///
+    /// Unlike [`SessionBuilder::spawn`], no string parsing happens here, so
+    /// there's no ambiguity about where one argument ends and the next
+    /// begins - each element of `args` becomes exactly one argv entry,
+    /// regardless of any spaces or quote characters it contains.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use expectrust::Session;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let session = Session::builder()
+    ///     .spawn_args("ssh", &["-o", "StrictHostKeyChecking=no", "host"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn spawn_args<S: AsRef<str>>(
+        self,
+        program: &str,
+        args: &[S],
+    ) -> Result<Session, ExpectError> {
+        self.spawn_argv(program, args.iter().map(S::as_ref))
+    }
+
+    /// Shared implementation behind [`SessionBuilder::spawn`] and
+    /// [`SessionBuilder::spawn_args`]: create the PTY and spawn `program`
+    /// with `args` as its argv, once both have already been determined.
+    fn spawn_argv<'a>(
+        self,
+        program: &str,
+        args: impl Iterator<Item = &'a str>,
+    ) -> Result<Session, ExpectError> {
+        if program.is_empty() {
+            return Err(ExpectError::SpawnError("Empty command".to_string()));
+        }
+
         let pty_system = native_pty_system();
 
         // Create PTY pair
@@ -209,15 +261,9 @@ impl SessionBuilder {
             .openpty(self.pty_size)
             .map_err(|e| ExpectError::PtyError(e.to_string()))?;
 
-        // Parse command into parts
-        let parts: Vec<&str> = command.split_whitespace().collect();
-        if parts.is_empty() {
-            return Err(ExpectError::SpawnError("Empty command".to_string()));
-        }
-
         // Build command
-        let mut cmd = CommandBuilder::new(parts[0]);
-        for arg in &parts[1..] {
+        let mut cmd = CommandBuilder::new(program);
+        for arg in args {
             cmd.arg(arg);
         }
 
@@ -240,8 +286,15 @@ impl SessionBuilder {
             .take_writer()
             .map_err(|e| ExpectError::PtyError(e.to_string()))?;
 
+        // Drop our copy of the slave side now that the child has its own
+        // (inherited via fork/exec on Unix). Otherwise our lingering handle
+        // keeps the OS's view of the pty "open" even after the child exits,
+        // so a master-side read never sees EOF - it just blocks forever
+        // instead of returning `Ok(0)`.
+        drop(pty_pair.slave);
+
         Ok(Session {
-            _pty_pair: pty_pair,
+            _pty_master: pty_pair.master,
             child: Some(child),
             master_reader: Arc::new(Mutex::new(reader)),
             master_writer: Arc::new(Mutex::new(writer)),
@@ -250,5 +303,42 @@ impl SessionBuilder {
             eof_reached: false,
             max_buffer_size: self.max_buffer_size,
         })
+    }
+}
+
+/// Parse a shell-style command line into a program + argument list,
+/// respecting quotes and backslash escapes (so e.g. `-o "value with spaces"`
+/// stays as two elements, not three or four).
+fn parse_command_line(command: &str) -> Result<Vec<String>, ExpectError> {
+    let parts = shell_words::split(command)
+        .map_err(|e| ExpectError::SpawnError(format!("invalid command line: {e}")))?;
+    if parts.is_empty() {
+        return Err(ExpectError::SpawnError("Empty command".to_string()));
+    }
+    Ok(parts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_command_line_respects_quotes() {
+        let parts = parse_command_line(r#"ssh -o "StrictHostKeyChecking=no" host"#).unwrap();
+        assert_eq!(
+            parts,
+            vec![
+                "ssh".to_string(),
+                "-o".to_string(),
+                "StrictHostKeyChecking=no".to_string(),
+                "host".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_command_line_empty_is_error() {
+        assert!(parse_command_line("").is_err());
+        assert!(parse_command_line("   ").is_err());
     }
 }

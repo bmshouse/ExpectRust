@@ -18,16 +18,18 @@ statement = {
   | proc_stmt
   | close_stmt
   | wait_stmt
+  | interact_stmt
+  | exp_continue_stmt
   | exit_stmt
   | call_stmt
   | newline
 }
 
-spawn_stmt = { "spawn" ~ word+ ~ newline }
+spawn_stmt = { "spawn" ~ word+ ~ stmt_end }
 
-expect_stmt = { "expect" ~ (expect_block | pattern_spec) ~ newline }
+expect_stmt = { "expect" ~ (expect_block | pattern_spec) ~ stmt_end }
 
-expect_block = { "{" ~ newline* ~ expect_case+ ~ "}" }
+expect_block = { "{" ~ newline* ~ (expect_case ~ newline*)+ ~ "}" }
 
 expect_case = { pattern_spec ~ brace_block }
 
@@ -39,31 +41,47 @@ pattern_spec = {
   | word
 }
 
-send_stmt = { "send" ~ word ~ newline }
+send_stmt = { "send" ~ word ~ stmt_end }
 
-set_stmt = { "set" ~ identifier ~ word ~ newline }
+// The assigned value is either a plain word (existing behavior: numbers,
+// strings, and bare "$var" text resolved via runtime text-substitution) or
+// a parenthesized computed expression like `($i + 1)` - needed for anything
+// that increments a loop counter (`while`/`for` would otherwise have a
+// working condition but no way to actually change the loop variable).
+set_stmt = { "set" ~ identifier ~ (paren_expr | word) ~ stmt_end }
+
+paren_expr = { "(" ~ expression ~ ")" }
 
 if_stmt = {
-    "if" ~ brace_block ~ brace_block ~ ("else" ~ brace_block)? ~ newline
+    "if" ~ condition ~ brace_block ~ ("else" ~ brace_block)? ~ stmt_end
 }
 
-while_stmt = { "while" ~ brace_block ~ brace_block ~ newline }
+while_stmt = { "while" ~ condition ~ brace_block ~ stmt_end }
 
 for_stmt = {
-    "for" ~ brace_block ~ brace_block ~ brace_block ~ brace_block ~ newline
+    "for" ~ brace_block ~ condition ~ brace_block ~ brace_block ~ stmt_end
 }
+
+// A boolean condition: `{ <expression> }`, e.g. `{ $x == 1 }`. Distinct from
+// `brace_block` (a sequence of statements) - if/while/for's condition slot
+// is an expression to evaluate, not statements to run.
+condition = { "{" ~ expression ~ "}" }
 
 proc_stmt = {
-    "proc" ~ identifier ~ brace_list ~ brace_block ~ newline
+    "proc" ~ identifier ~ brace_list ~ brace_block ~ stmt_end
 }
 
-call_stmt = { identifier ~ word* ~ newline }
+call_stmt = { identifier ~ word* ~ stmt_end }
 
-close_stmt = { "close" ~ newline }
+close_stmt = { "close" ~ stmt_end }
 
-wait_stmt = { "wait" ~ newline }
+wait_stmt = { "wait" ~ stmt_end }
 
-exit_stmt = { "exit" ~ word? ~ newline }
+interact_stmt = { "interact" ~ stmt_end }
+
+exp_continue_stmt = { "exp_continue" ~ stmt_end }
+
+exit_stmt = { "exit" ~ word? ~ stmt_end }
 
 // Blocks
 brace_block = { "{" ~ newline* ~ statement* ~ "}" }
@@ -123,7 +141,18 @@ number = @{
     "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)?
 }
 
-variable = { "$" ~ identifier }
+// `$name` or `$name(index)` - the parenthesized form is for array-style
+// access like `$expect_out(0,string)`. The index is captured as raw text
+// (no nested variable substitution inside it) and becomes part of the
+// variable's name string, e.g. "expect_out(0,string)" - stored/looked-up as
+// one flat key, not a real Tcl array. Atomic (`@`) so there's no implicit
+// whitespace-skipping between `identifier` and the optional `array_index` -
+// without that, attempting (and failing) to match a following `(` still
+// consumes trailing whitespace into this rule's own span, e.g. turning `$i`
+// followed by a space into the 3-character name "i " instead of "i".
+variable = @{ "$" ~ identifier ~ array_index? }
+
+array_index = @{ "(" ~ (!")" ~ ANY)* ~ ")" }
 
 string = @{
     "\"" ~ string_inner ~ "\""
@@ -153,4 +182,16 @@ identifier = @{
     (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*
 }
 
+// A literal newline. Used (among other places) inside `newline*`/`+`
+// repetitions for skipping blank lines - must stay strictly consuming, since
+// a zero-width alternative here would make those repetitions "non-progressing"
+// (pest rejects such grammars at compile time as a potential infinite loop).
 newline = _{ "\n" }
+
+// A statement's trailing terminator: a real newline, or (without consuming)
+// the closing brace of the enclosing block / end of input - lets a block's
+// last (or only) statement be written on the same line as its closing "}",
+// e.g. `{incr i}` or a one-line expect action, without needing a newline
+// that isn't actually there. Only ever used once per statement (never inside
+// a repetition), so being zero-width-capable here is safe.
+stmt_end = _{ "\n" | &"}" | &EOI }

@@ -51,6 +51,8 @@ fn parse_statement(pair: pest::iterators::Pair<Rule>) -> Result<Option<Statement
         Rule::proc_stmt => Ok(Some(parse_proc_stmt(inner)?)),
         Rule::close_stmt => Ok(Some(Statement::Close)),
         Rule::wait_stmt => Ok(Some(Statement::Wait)),
+        Rule::interact_stmt => Ok(Some(Statement::Interact)),
+        Rule::exp_continue_stmt => Ok(Some(Statement::ExpContinue)),
         Rule::exit_stmt => Ok(Some(parse_exit_stmt(inner)?)),
         Rule::call_stmt => Ok(Some(parse_call_stmt(inner)?)),
         _ => Ok(None),
@@ -59,15 +61,15 @@ fn parse_statement(pair: pest::iterators::Pair<Rule>) -> Result<Option<Statement
 
 fn parse_spawn_stmt(pair: pest::iterators::Pair<Rule>) -> Result<Statement, ScriptError> {
     let inner = pair.into_inner();
-    // Collect all words into a single command string
-    let mut words = Vec::new();
+    // Each word becomes its own argument expression - NOT joined into a
+    // single string, so a word containing a space (a quoted literal, or a
+    // variable substituted at runtime) stays exactly one argv entry.
+    let mut args = Vec::new();
     for word_pair in inner {
-        words.push(parse_word(word_pair)?);
+        let word = parse_word(word_pair)?;
+        args.push(Expression::String(word));
     }
-    let command_str = words.join(" ");
-    Ok(Statement::Spawn(SpawnStmt {
-        command: Expression::String(command_str),
-    }))
+    Ok(Statement::Spawn(SpawnStmt { args }))
 }
 
 fn parse_expect_stmt(pair: pest::iterators::Pair<Rule>) -> Result<Statement, ScriptError> {
@@ -110,10 +112,21 @@ fn parse_pattern_spec(
     pair: pest::iterators::Pair<Rule>,
     action: Option<Block>,
 ) -> Result<ExpectPattern, ScriptError> {
+    // The "-re"/"-gl"/"timeout"/"eof" keywords are plain string literals
+    // inside this rule, not sub-rules of their own - only the `word`
+    // alternative produces an inner pair. So they can't be distinguished by
+    // inspecting `.into_inner()` (as the previous implementation tried to,
+    // which either panicked on a missing inner pair for "timeout"/"eof", or
+    // silently misdetected "-re"/"-gl" as plain words since the "first"
+    // inner pair for `("-re" ~ word)` is actually the `word` match, never
+    // the literal "-re" itself). Detect them from the pattern_spec's own
+    // captured text instead, then pull the pattern word (if any) from
+    // `.into_inner()` separately.
+    let text = pair.as_str().trim().to_string();
+    let first_word = text.split_whitespace().next().unwrap_or("").to_string();
     let mut inner = pair.into_inner();
-    let first = inner.next().unwrap();
 
-    let pattern_type = match first.as_str() {
+    let pattern_type = match first_word.as_str() {
         "-re" => {
             let word = parse_word(inner.next().unwrap())?;
             PatternType::Regex(word)
@@ -122,11 +135,11 @@ fn parse_pattern_spec(
             let word = parse_word(inner.next().unwrap())?;
             PatternType::Glob(word)
         }
-        "timeout" => PatternType::Timeout,
-        "eof" => PatternType::Eof,
+        "timeout" if text == "timeout" => PatternType::Timeout,
+        "eof" if text == "eof" => PatternType::Eof,
         _ => {
             // It's a word (exact match)
-            let word = parse_word(first)?;
+            let word = parse_word(inner.next().unwrap())?;
             PatternType::Exact(word)
         }
     };
@@ -148,27 +161,36 @@ fn parse_send_stmt(pair: pest::iterators::Pair<Rule>) -> Result<Statement, Scrip
 fn parse_set_stmt(pair: pest::iterators::Pair<Rule>) -> Result<Statement, ScriptError> {
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
-    let word = parse_word(inner.next().unwrap())?;
-    // Try to parse as number, otherwise string
-    let value = if let Ok(num) = word.parse::<f64>() {
-        Expression::Number(num)
-    } else {
-        Expression::String(word)
+    let value_pair = inner.next().unwrap();
+
+    let value = match value_pair.as_rule() {
+        Rule::paren_expr => {
+            let expr_pair = value_pair.into_inner().next().unwrap();
+            parse_expression(expr_pair)?
+        }
+        _ => {
+            // Try to parse as number, otherwise string (existing behavior
+            // for plain words: numbers, quoted/brace strings, and bare
+            // "$var" text resolved via runtime substitution).
+            let word = parse_word(value_pair)?;
+            if let Ok(num) = word.parse::<f64>() {
+                Expression::Number(num)
+            } else {
+                Expression::String(word)
+            }
+        }
     };
+
     Ok(Statement::Set(SetStmt { name, value }))
 }
 
 fn parse_if_stmt(pair: pest::iterators::Pair<Rule>) -> Result<Statement, ScriptError> {
     let mut inner = pair.into_inner();
 
-    // First brace_block is the condition
-    let cond_block = parse_brace_block(inner.next().unwrap())?;
-    let condition = block_to_expression(cond_block);
-
-    // Second brace_block is the then block
+    let condition = parse_condition(inner.next().unwrap())?;
     let then_block = parse_brace_block(inner.next().unwrap())?;
 
-    // Optional third brace_block is the else block
+    // Optional else block
     let else_block = inner.next().map(|p| parse_brace_block(p)).transpose()?;
 
     Ok(Statement::If(IfStmt {
@@ -181,9 +203,7 @@ fn parse_if_stmt(pair: pest::iterators::Pair<Rule>) -> Result<Statement, ScriptE
 fn parse_while_stmt(pair: pest::iterators::Pair<Rule>) -> Result<Statement, ScriptError> {
     let mut inner = pair.into_inner();
 
-    let cond_block = parse_brace_block(inner.next().unwrap())?;
-    let condition = block_to_expression(cond_block);
-
+    let condition = parse_condition(inner.next().unwrap())?;
     let body = parse_brace_block(inner.next().unwrap())?;
 
     Ok(Statement::While(WhileStmt { condition, body }))
@@ -203,8 +223,7 @@ fn parse_for_stmt(pair: pest::iterators::Pair<Rule>) -> Result<Statement, Script
             })),
     );
 
-    let cond_block = parse_brace_block(inner.next().unwrap())?;
-    let condition = block_to_expression(cond_block);
+    let condition = parse_condition(inner.next().unwrap())?;
 
     let incr_block = parse_brace_block(inner.next().unwrap())?;
     let increment = Box::new(
@@ -225,6 +244,116 @@ fn parse_for_stmt(pair: pest::iterators::Pair<Rule>) -> Result<Statement, Script
         increment,
         body,
     }))
+}
+
+/// Parse a `condition` pair (`{ <expression> }`) into a real `Expression`.
+fn parse_condition(pair: pest::iterators::Pair<Rule>) -> Result<Expression, ScriptError> {
+    let inner = pair.into_inner().next().unwrap();
+    parse_expression(inner)
+}
+
+/// Parse an `expression`-family pair into a real `Expression` AST node.
+///
+/// Unlike `parse_word` (which deliberately flattens everything to a `String`
+/// for word-list contexts like `spawn`/`send` arguments, deferring `$var`
+/// substitution to runtime text-scanning), this preserves structure -
+/// `BinaryOp`/`UnaryOp`/`Variable`/etc. - which conditions need so
+/// `evaluate_binary_op` can actually compare values instead of just always
+/// being handed a placeholder.
+fn parse_expression(pair: pest::iterators::Pair<Rule>) -> Result<Expression, ScriptError> {
+    match pair.as_rule() {
+        Rule::expression | Rule::primary_expr => {
+            let inner = pair.into_inner().next().unwrap();
+            parse_expression(inner)
+        }
+        Rule::binary_expr => {
+            let mut inner = pair.into_inner();
+            let left = parse_expression(inner.next().unwrap())?;
+            let op = parse_binary_op(inner.next().unwrap().as_str())?;
+            let right = parse_expression(inner.next().unwrap())?;
+            Ok(Expression::BinaryOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            })
+        }
+        Rule::unary_expr => {
+            let mut inner = pair.into_inner();
+            let op = parse_unary_op(inner.next().unwrap().as_str())?;
+            let operand = parse_expression(inner.next().unwrap())?;
+            Ok(Expression::UnaryOp {
+                op,
+                operand: Box::new(operand),
+            })
+        }
+        Rule::number => {
+            let n: f64 = pair.as_str().parse().map_err(|_| {
+                ScriptError::RuntimeError(format!("Invalid number: {}", pair.as_str()))
+            })?;
+            Ok(Expression::Number(n))
+        }
+        Rule::variable => {
+            let name = pair
+                .as_str()
+                .strip_prefix('$')
+                .unwrap_or(pair.as_str())
+                .to_string();
+            Ok(Expression::Variable(name))
+        }
+        Rule::string => {
+            let s = pair.as_str();
+            let s = &s[1..s.len() - 1];
+            Ok(Expression::String(parse_string_inner(s)))
+        }
+        Rule::brace_string => {
+            let s = pair.as_str();
+            Ok(Expression::String(s[1..s.len() - 1].to_string()))
+        }
+        Rule::bare_word => Ok(Expression::String(pair.as_str().to_string())),
+        Rule::list => {
+            let mut items = Vec::new();
+            for inner_pair in pair.into_inner() {
+                items.push(parse_expression(inner_pair)?);
+            }
+            Ok(Expression::List(items))
+        }
+        _ => Err(ScriptError::RuntimeError(format!(
+            "Unexpected expression rule: {:?}",
+            pair.as_rule()
+        ))),
+    }
+}
+
+fn parse_binary_op(s: &str) -> Result<BinaryOperator, ScriptError> {
+    match s {
+        "+" => Ok(BinaryOperator::Add),
+        "-" => Ok(BinaryOperator::Sub),
+        "*" => Ok(BinaryOperator::Mul),
+        "/" => Ok(BinaryOperator::Div),
+        "==" => Ok(BinaryOperator::Eq),
+        "!=" => Ok(BinaryOperator::Ne),
+        "<=" => Ok(BinaryOperator::Le),
+        ">=" => Ok(BinaryOperator::Ge),
+        "<" => Ok(BinaryOperator::Lt),
+        ">" => Ok(BinaryOperator::Gt),
+        "&&" => Ok(BinaryOperator::And),
+        "||" => Ok(BinaryOperator::Or),
+        other => Err(ScriptError::RuntimeError(format!(
+            "Unknown binary operator: {}",
+            other
+        ))),
+    }
+}
+
+fn parse_unary_op(s: &str) -> Result<UnaryOperator, ScriptError> {
+    match s {
+        "-" => Ok(UnaryOperator::Neg),
+        "!" => Ok(UnaryOperator::Not),
+        other => Err(ScriptError::RuntimeError(format!(
+            "Unknown unary operator: {}",
+            other
+        ))),
+    }
 }
 
 fn parse_proc_stmt(pair: pest::iterators::Pair<Rule>) -> Result<Statement, ScriptError> {
@@ -357,13 +486,48 @@ fn parse_string_inner(s: &str) -> String {
     result
 }
 
-fn block_to_expression(block: Block) -> Expression {
-    // For simplicity, convert a block to an expression by evaluating the last statement
-    // In a real implementation, this would need more sophisticated handling
-    if block.is_empty() {
-        Expression::Number(1.0)
-    } else {
-        // For now, just use a placeholder - the interpreter will handle this properly
-        Expression::Number(1.0)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_condition_builds_binary_op() {
+        let block = parse_script("if { $x == 1 } {\n}\n").expect("parse failed");
+        assert_eq!(block.len(), 1);
+
+        match &block[0] {
+            Statement::If(if_stmt) => {
+                assert_eq!(
+                    if_stmt.condition,
+                    Expression::BinaryOp {
+                        left: Box::new(Expression::Variable("x".to_string())),
+                        op: BinaryOperator::Eq,
+                        right: Box::new(Expression::Number(1.0)),
+                    }
+                );
+            }
+            other => panic!("Expected Statement::If, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_set_paren_expr_builds_binary_op() {
+        let block = parse_script("set i ($i + 1)\n").expect("parse failed");
+        assert_eq!(block.len(), 1);
+
+        match &block[0] {
+            Statement::Set(set_stmt) => {
+                assert_eq!(set_stmt.name, "i");
+                assert_eq!(
+                    set_stmt.value,
+                    Expression::BinaryOp {
+                        left: Box::new(Expression::Variable("i".to_string())),
+                        op: BinaryOperator::Add,
+                        right: Box::new(Expression::Number(1.0)),
+                    }
+                );
+            }
+            other => panic!("Expected Statement::Set, got {:?}", other),
+        }
     }
 }

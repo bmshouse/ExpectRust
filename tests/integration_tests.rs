@@ -585,3 +585,52 @@ async fn test_spawn_invalid_command() {
     // Should fail to spawn non-existent command
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn test_spawn_args_keeps_argument_with_space_as_one_arg() {
+    // No standalone `printf` binary on Windows to run this same check
+    // against without a shell in the way.
+    if cfg!(windows) {
+        return;
+    }
+
+    // `printf` recycles its format string over any extra positional
+    // arguments, so this is a real differentiating check: if "hello world"
+    // were ever wrongly split into two arguments, the output would be
+    // "hello\nworld\n" (two lines) instead of "hello world\n" (one line
+    // containing the exact substring being matched below).
+    let mut session = Session::builder()
+        .timeout(Duration::from_secs(5))
+        .spawn_args("printf", &["%s\n", "hello world"])
+        .expect("Failed to spawn printf");
+
+    let result = session
+        .expect(Pattern::exact("hello world"))
+        .await
+        .expect("Expected \"hello world\" as a single argument");
+
+    assert_eq!(result.matched, "hello world");
+}
+
+#[tokio::test]
+async fn test_spawn_quoted_argument_with_space() {
+    if cfg!(windows) {
+        return;
+    }
+
+    // Same check as above, but through the string-parsing `spawn` (not
+    // `spawn_args`), proving `shell_words::split` keeps a quoted argument
+    // with an embedded space as one argv entry instead of naive
+    // whitespace-splitting breaking it into two.
+    let mut session = Session::builder()
+        .timeout(Duration::from_secs(5))
+        .spawn(r#"printf "%s\n" "hello world""#)
+        .expect("Failed to spawn printf");
+
+    let result = session
+        .expect(Pattern::exact("hello world"))
+        .await
+        .expect("Expected \"hello world\" as a single argument");
+
+    assert_eq!(result.matched, "hello world");
+}

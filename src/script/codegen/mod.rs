@@ -119,6 +119,8 @@ impl Translator {
             Statement::Call(s) => statement::gen_call(s, self),
             Statement::Close => Ok("drop(session);".to_string()),
             Statement::Wait => Ok("session.wait().await?;".to_string()),
+            Statement::Interact => Ok("session.interact().await?;".to_string()),
+            Statement::ExpContinue => Ok("continue;".to_string()),
             Statement::Exit(code) => {
                 if let Some(expr) = code {
                     let code_expr = expression::generate_expression(expr, self)?;
