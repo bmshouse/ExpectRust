@@ -4,6 +4,9 @@ use crate::buffer::BufferManager;
 use crate::result::ExpectError;
 use crate::session::Session;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+#[cfg(windows)]
+use std::io::Read;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -293,11 +296,25 @@ impl SessionBuilder {
         // instead of returning `Ok(0)`.
         drop(pty_pair.slave);
 
+        // Built here (rather than inline below) so a clone can be handed to
+        // `ConptyReader` on Windows while the same `Arc` still becomes
+        // `Session.master_writer`.
+        let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(writer));
+
+        // On Windows, wrap the raw reader so ConPTY's startup cursor-position
+        // query gets answered as soon as it arrives, regardless of whether
+        // the caller ever reads before e.g. calling `wait()` directly - see
+        // `ConptyReader`'s doc comment in `session/mod.rs`. Unix ptys never
+        // send this query, so the reader is used as-is there.
+        #[cfg(windows)]
+        let reader: Box<dyn Read + Send> =
+            Box::new(super::ConptyReader::new(reader, writer.clone()));
+
         Ok(Session {
             _pty_master: pty_pair.master,
             child: Some(child),
             master_reader: Arc::new(Mutex::new(reader)),
-            master_writer: Arc::new(Mutex::new(writer)),
+            master_writer: writer,
             buffer: BufferManager::new(self.max_buffer_size, self.strip_ansi),
             timeout: self.timeout,
             eof_reached: false,

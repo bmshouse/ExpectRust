@@ -164,10 +164,17 @@ mod script_tests {
 
     #[tokio::test]
     async fn test_execute_expect_out_send() {
+        // Note: the regex deliberately matches the literal word "hello"
+        // rather than a generic `[a-z]+` run - ConPTY setup escape sequences
+        // (e.g. `\x1b[m`) aren't stripped from the buffer (same as anywhere
+        // else in this project), so an unanchored `[a-z]+` can end up
+        // absorbing a stray trailing letter from one of those sequences
+        // (observed: matching "mhello" instead of "hello") depending on
+        // exactly what precedes the real output.
         let script_text = if cfg!(windows) {
             r#"
                 spawn cmd /c echo hello123
-                expect -re "([a-z]+)([0-9]+)"
+                expect -re "(hello)([0-9]+)"
                 set captured1 $expect_out(1,string)
                 set captured2 $expect_out(2,string)
                 set whole $expect_out(0,string)
@@ -175,7 +182,7 @@ mod script_tests {
         } else {
             r#"
                 spawn echo hello123
-                expect -re "([a-z]+)([0-9]+)"
+                expect -re "(hello)([0-9]+)"
                 set captured1 $expect_out(1,string)
                 set captured2 $expect_out(2,string)
                 set whole $expect_out(0,string)
@@ -207,10 +214,12 @@ mod script_tests {
         // Combines both fixes: expect_out is only useful once conditions
         // actually evaluate real content, so this is the point of doing both
         // in one pass - branching directly on what was just matched.
+        // See test_execute_expect_out_send for why the regex matches the
+        // literal word "hello" rather than a generic `[a-z]+` run.
         let script_text = if cfg!(windows) {
             r#"
                 spawn cmd /c echo hello123
-                expect -re "([a-z]+)([0-9]+)"
+                expect -re "(hello)([0-9]+)"
                 if { $expect_out(1,string) == "hello" } {
                     set matched 1
                 } else {
@@ -220,7 +229,7 @@ mod script_tests {
         } else {
             r#"
                 spawn echo hello123
-                expect -re "([a-z]+)([0-9]+)"
+                expect -re "(hello)([0-9]+)"
                 if { $expect_out(1,string) == "hello" } {
                     set matched 1
                 } else {

@@ -50,6 +50,18 @@ pub struct Session {
     max_buffer_size: usize,
 }
 
+/// How often `expect_any` checks whether the child has exited while
+/// otherwise waiting for more data, so it can synthesize EOF on platforms
+/// where the pty itself doesn't signal it on child exit (see
+/// `docs/CORE_CAPABILITIES_TODO.md` item 18) rather than only ever
+/// discovering that once the whole configured timeout has elapsed.
+const CHILD_LIVENESS_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// A single in-flight blocking read from the pty, reused across `expect_any`
+/// loop iterations rather than respawned - see `expect_any`'s "Try to read
+/// more data" section for why that matters.
+type PendingRead = tokio::task::JoinHandle<std::io::Result<(usize, Vec<u8>)>>;
+
 impl Session {
     /// Create a new session builder.
     ///
@@ -217,8 +229,12 @@ impl Session {
 
         let timeout_duration = self.timeout;
 
-        let mut read_buf = vec![0u8; 4096];
         let start_time = std::time::Instant::now();
+
+        // At most one blocking read task is kept in flight for this whole
+        // call, reused across loop iterations - see the "Try to read more
+        // data" section below for why that matters.
+        let mut pending_read: Option<PendingRead> = None;
 
         loop {
             // Check for matches in current buffer
@@ -293,80 +309,82 @@ impl Session {
                 }
             }
 
-            // Try to read more data
-            let remaining_timeout =
-                timeout_duration.map(|t| t.saturating_sub(start_time.elapsed()));
+            // Try to read more data. At most one blocking read task is ever
+            // outstanding at a time for this call - spawned once, then
+            // polled again (not respawned) on every iteration until it
+            // actually completes. This matters for correctness: if we
+            // instead spawned a fresh short-lived read attempt on every
+            // iteration and abandoned whichever one didn't finish in time,
+            // an abandoned attempt could *still* succeed later (real bytes
+            // arrive) with nobody left awaiting it - silently discarding
+            // real output. Reusing the same handle means whatever it
+            // eventually returns is always the thing we're waiting for.
+            if pending_read.is_none() {
+                let reader = self.master_reader.clone();
+                pending_read = Some(tokio::task::spawn_blocking(move || {
+                    let mut reader = reader.blocking_lock();
+                    let mut temp_buf = vec![0u8; 4096];
+                    reader.read(&mut temp_buf).map(|n| (n, temp_buf))
+                }));
+            }
 
-            match self
-                .read_with_timeout(&mut read_buf, remaining_timeout)
-                .await
-            {
-                Ok(0) => {
-                    // EOF
-                    self.eof_reached = true;
-                    if !has_eof {
-                        return Err(ExpectError::Eof);
+            // Bounded by both a fixed poll interval and whatever's left of
+            // the overall deadline, so we periodically get control back to
+            // check the child's status without ever overshooting the
+            // configured timeout by more than a negligible amount.
+            let poll_duration = match timeout_duration {
+                Some(timeout) => timeout
+                    .saturating_sub(start_time.elapsed())
+                    .min(CHILD_LIVENESS_POLL_INTERVAL),
+                None => CHILD_LIVENESS_POLL_INTERVAL,
+            };
+
+            tokio::select! {
+                res = pending_read.as_mut().unwrap() => {
+                    pending_read = None;
+                    match res {
+                        Ok(Ok((0, _))) => {
+                            // EOF
+                            self.eof_reached = true;
+                            if !has_eof {
+                                return Err(ExpectError::Eof);
+                            }
+                        }
+                        Ok(Ok((n, temp_buf))) => {
+                            self.buffer.append(&temp_buf[..n])?;
+                        }
+                        Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            // No data available right now - a fresh read
+                            // task gets spawned next iteration.
+                        }
+                        Ok(Err(e)) => return Err(ExpectError::IoError(e)),
+                        Err(join_err) => {
+                            return Err(ExpectError::IoError(std::io::Error::other(join_err)));
+                        }
                     }
                 }
-                Ok(n) => {
-                    self.buffer.append(&read_buf[..n])?;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // No data available, continue loop
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                    // Timeout from read operation
-                    if has_timeout {
-                        let pattern_idx = patterns
-                            .iter()
-                            .position(|p| matches!(p, Pattern::Timeout))
-                            .unwrap();
-                        return Ok(MatchResult {
-                            pattern_index: pattern_idx,
-                            matched: String::new(),
-                            start: self.buffer.len(),
-                            end: self.buffer.len(),
-                            before: self.buffer.as_str().to_owned(),
-                            captures: vec![],
-                        });
-                    } else if let Some(timeout) = timeout_duration {
-                        return Err(ExpectError::Timeout { duration: timeout });
-                    } else {
-                        return Err(ExpectError::IoError(e));
+                _ = tokio::time::sleep(poll_duration) => {
+                    // No data within this window. On some platforms (ConPTY
+                    // - see docs/CORE_CAPABILITIES_TODO.md item 18) the pty
+                    // never signals EOF on its own once the child exits, so
+                    // check independently via the child's own exit status
+                    // and synthesize EOF instead of waiting for a real
+                    // `read() == 0` that may never come. `pending_read` is
+                    // deliberately left outstanding here (same accepted
+                    // "abandoned, not killed" tradeoff already used by
+                    // `interact_with`) - if the child is genuinely still
+                    // alive this is a no-op and we just loop back around,
+                    // with the timeout check above still enforcing the
+                    // overall deadline.
+                    if matches!(self.is_alive(), Ok(false)) {
+                        self.eof_reached = true;
+                        if !has_eof {
+                            return Err(ExpectError::Eof);
+                        }
                     }
                 }
-                Err(e) => return Err(ExpectError::IoError(e)),
             }
         }
-    }
-
-    /// Read with timeout
-    async fn read_with_timeout(
-        &mut self,
-        buf: &mut [u8],
-        timeout: Option<Duration>,
-    ) -> std::io::Result<usize> {
-        let reader = self.master_reader.clone();
-        let buf_len = buf.len();
-
-        let read_future = tokio::task::spawn_blocking(move || {
-            let mut reader = reader.blocking_lock();
-            let mut temp_buf = vec![0u8; buf_len];
-            reader.read(&mut temp_buf).map(|n| (n, temp_buf))
-        });
-
-        let result = if let Some(timeout) = timeout {
-            tokio::time::timeout(timeout, read_future)
-                .await
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "Read timeout"))??
-        } else {
-            read_future.await.map_err(std::io::Error::other)?
-        }?;
-
-        let (n, temp_buf) = result;
-        buf[..n].copy_from_slice(&temp_buf[..n]);
-        Ok(n)
     }
 
     /// Send data to the process.
@@ -618,7 +636,7 @@ impl Session {
         let writer = self.master_writer.clone();
         let reader = self.master_reader.clone();
 
-        let input_task = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let mut input_task = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
             let mut buf = [0u8; 1024];
             loop {
                 let n = input.read(&mut buf)?;
@@ -632,7 +650,7 @@ impl Session {
             }
         });
 
-        let output_task = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let mut output_task = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
             let mut buf = [0u8; 4096];
             loop {
                 let n = {
@@ -654,18 +672,153 @@ impl Session {
         let input_abort = input_task.abort_handle();
         let output_abort = output_task.abort_handle();
 
-        tokio::select! {
-            res = output_task => {
-                input_abort.abort();
-                res.map_err(|e| ExpectError::IoError(std::io::Error::other(e)))??;
-            }
-            res = input_task => {
-                output_abort.abort();
-                res.map_err(|e| ExpectError::IoError(std::io::Error::other(e)))??;
+        loop {
+            tokio::select! {
+                res = &mut output_task => {
+                    input_abort.abort();
+                    res.map_err(|e| ExpectError::IoError(std::io::Error::other(e)))??;
+                    break;
+                }
+                res = &mut input_task => {
+                    output_abort.abort();
+                    res.map_err(|e| ExpectError::IoError(std::io::Error::other(e)))??;
+                    break;
+                }
+                _ = tokio::time::sleep(CHILD_LIVENESS_POLL_INTERVAL) => {
+                    // Neither side has produced anything yet. On platforms
+                    // where the pty doesn't signal EOF on child exit (see
+                    // `docs/CORE_CAPABILITIES_TODO.md` item 18), check
+                    // independently via the child's own exit status. Both
+                    // blocking tasks are abandoned here rather than killed
+                    // (same tradeoff already documented above) - there's
+                    // nothing meaningful left to forward once the child has
+                    // exited, so unlike `expect_any` there's no risk of
+                    // this silently discarding data anyone still needs.
+                    if matches!(self.is_alive(), Ok(false)) {
+                        input_abort.abort();
+                        output_abort.abort();
+                        break;
+                    }
+                }
             }
         }
 
         Ok(())
+    }
+}
+
+/// Detects ConPTY's startup cursor-position query (`ESC [ 6 n`, ANSI Device
+/// Status Report) and returns the fixed reply that unblocks it.
+///
+/// `portable-pty` >= 0.9 creates ConPTY with `PSUEDOCONSOLE_INHERIT_CURSOR`,
+/// which makes ConPTY block *all* child I/O until something answers this
+/// query. We aren't a real terminal emulator that tracks actual cursor
+/// position, so - matching the workaround other `portable-pty` consumers
+/// facing the same issue have independently landed, and the upstream
+/// maintainer's stated position that answering this is the PTY consumer's
+/// responsibility, not a library bug - we always answer "row 1, col 1".
+/// That's wrong for a program that genuinely depends on real cursor
+/// tracking (rare for one-shot commands, more plausible for a full TUI
+/// under `interact()`), but far better than never responding and
+/// deadlocking. Unix ptys don't emit this query at all, so callers only
+/// need to act on a match under `#[cfg(windows)]`; this detector itself has
+/// no OS dependency, so it's exercised by a test on any platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn conpty_cursor_query_response(data: &[u8]) -> Option<&'static [u8]> {
+    data.windows(4)
+        .any(|w| w == b"\x1b[6n")
+        .then_some(b"\x1b[1;1R")
+}
+
+/// A `Read` adapter that owns the real pty reader on a dedicated background
+/// thread for its entire lifetime, forwarding chunks through a channel.
+///
+/// This exists so ConPTY's startup cursor-position query gets answered as
+/// soon as it arrives, *regardless* of whether or when the `Session`'s
+/// owner ever actually reads (e.g. a caller that goes straight from
+/// `spawn` to `wait()` with no `expect()` in between would otherwise never
+/// see the query at all, leaving the child permanently blocked). A
+/// one-shot "read once right after spawn" approach doesn't work here:
+/// `portable-pty`'s Windows `try_clone_reader()` hands back a real OS-level
+/// duplicate handle, and two independent handles reading the same pipe
+/// race for bytes rather than each seeing a copy - so there's no safe way
+/// to peek without risking stealing real output from whatever reader would
+/// normally consume it. Running one thread as the sole, permanent reader
+/// and forwarding everything it sees (after checking each chunk) avoids
+/// that entirely.
+#[cfg(windows)]
+struct ConptyReader {
+    rx: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    pending: Vec<u8>,
+    pending_pos: usize,
+}
+
+#[cfg(windows)]
+impl ConptyReader {
+    fn new(mut inner: Box<dyn Read + Send>, writer: Arc<Mutex<Box<dyn Write + Send>>>) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match inner.read(&mut buf) {
+                    Ok(0) => {
+                        // EOF: an empty chunk is an unambiguous sentinel,
+                        // since `Read::read` returning `Ok(0)` is only ever
+                        // defined to mean EOF, never a real zero-byte read.
+                        let _ = tx.send(Ok(Vec::new()));
+                        break;
+                    }
+                    Ok(n) => {
+                        let chunk = buf[..n].to_vec();
+                        if let Some(response) = conpty_cursor_query_response(&chunk) {
+                            let mut w = writer.blocking_lock();
+                            let _ = w.write_all(response);
+                            let _ = w.flush();
+                        }
+                        if tx.send(Ok(chunk)).is_err() {
+                            // Reader side dropped; nothing left to forward to.
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self {
+            rx,
+            pending: Vec::new(),
+            pending_pos: 0,
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Read for ConptyReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pending_pos >= self.pending.len() {
+            match self.rx.recv() {
+                Ok(Ok(chunk)) if chunk.is_empty() => return Ok(0),
+                Ok(Ok(chunk)) => {
+                    self.pending = chunk;
+                    self.pending_pos = 0;
+                }
+                Ok(Err(e)) => return Err(e),
+                // Background thread ended without sending (shouldn't happen
+                // given the loop above always sends before breaking, but
+                // treat a closed channel as EOF rather than panicking).
+                Err(_) => return Ok(0),
+            }
+        }
+
+        let available = &self.pending[self.pending_pos..];
+        let n = available.len().min(buf.len());
+        buf[..n].copy_from_slice(&available[..n]);
+        self.pending_pos += n;
+        Ok(n)
     }
 }
 
@@ -713,5 +866,30 @@ mod tests {
             !crossterm::terminal::is_raw_mode_enabled().unwrap_or(true),
             "raw mode should be restored once the guard is dropped"
         );
+    }
+
+    #[test]
+    fn test_conpty_cursor_query_response_detects_query() {
+        assert_eq!(
+            conpty_cursor_query_response(b"\x1b[6n"),
+            Some(&b"\x1b[1;1R"[..])
+        );
+    }
+
+    #[test]
+    fn test_conpty_cursor_query_response_detects_query_with_surrounding_bytes() {
+        // The query can arrive amid other ConPTY setup output, not
+        // necessarily as the very first/only bytes in the chunk.
+        let mut data = b"\x1b[?9001h".to_vec();
+        data.extend_from_slice(b"\x1b[6n");
+        data.extend_from_slice(b"more output");
+
+        assert_eq!(conpty_cursor_query_response(&data), Some(&b"\x1b[1;1R"[..]));
+    }
+
+    #[test]
+    fn test_conpty_cursor_query_response_none_when_absent() {
+        assert_eq!(conpty_cursor_query_response(b"hello world"), None);
+        assert_eq!(conpty_cursor_query_response(b""), None);
     }
 }
