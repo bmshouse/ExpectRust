@@ -4,7 +4,9 @@ use crate::buffer::BufferManager;
 use crate::result::ExpectError;
 use crate::session::Session;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use std::io::{Read, Write};
+#[cfg(windows)]
+use std::io::Read;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
